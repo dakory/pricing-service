@@ -1,29 +1,37 @@
 #!/bin/bash
 set -euxo pipefail
-
 exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
 
 dnf update -y
-dnf install -y docker awscli
-
-systemctl enable docker
-systemctl start docker
-
+dnf install -y docker awscli git
+systemctl enable --now docker
 usermod -aG docker ec2-user
 
+# A 3 GiB swap file keeps short browser/build peaks from killing PostgreSQL.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=3072
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+DEVICE=/dev/nvme1n1
+until [ -b "$DEVICE" ]; do sleep 2; done
+if ! blkid "$DEVICE"; then mkfs -t xfs "$DEVICE"; fi
 mkdir -p /opt/${app_name}
+mount "$DEVICE" /opt/${app_name}
+grep -q "$DEVICE" /etc/fstab || echo "$DEVICE /opt/${app_name} xfs defaults,nofail 0 2" >> /etc/fstab
 
-aws ecr get-login-password --region ${aws_region} \
-  | docker login --username AWS --password-stdin ${repository_url}
+aws ecr get-login-password --region ${aws_region} |
+  docker login --username AWS --password-stdin ${repository_url}
 
-docker pull ${repository_url}:${image_tag}
+cat > /opt/${app_name}/deployment.env <<EOF
+DOMAIN=${domain}
+BACKUP_BUCKET=${backup_bucket}
+BACKUP_KMS_KEY_ID=${backup_kms_key}
+EOF
+chmod 600 /opt/${app_name}/deployment.env
 
-docker rm -f ${app_name} || true
-
-docker run -d \
-  --name ${app_name} \
-  --restart unless-stopped \
-  -p ${host_port}:${container_port} \
-  ${repository_url}:${image_tag}
-
-echo "Bootstrap finished successfully" > /opt/${app_name}/bootstrap.txt
+echo "Bootstrap complete. Copy compose sources to /opt/${app_name}, populate .env from SSM, then run docker compose up -d." \
+  > /opt/${app_name}/bootstrap.txt

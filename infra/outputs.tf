@@ -13,3 +13,15 @@ output "public_ip" {
 output "ssm_hint" {
   value = "Connect via AWS Console or: aws ssm start-session --target ${aws_instance.app.id}"
 }
+output "elastic_ip" {
+  description = "Create an A record for the configured domain pointing here"
+  value       = aws_eip.app.public_ip
+}
+
+output "backup_bucket" {
+  value = aws_s3_bucket.backups.id
+}
+
+output "hostex_parameter_name" {
+  value = aws_ssm_parameter.hostex_token.name
+}

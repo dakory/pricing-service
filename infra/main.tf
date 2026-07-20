@@ -82,6 +82,121 @@ resource "aws_iam_role_policy_attachment" "ecr_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
+resource "aws_kms_key" "backups" {
+  description             = "Encrypt ${var.app_name} database backups"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+}
+
+resource "aws_s3_bucket" "backups" {
+  bucket_prefix = "${var.app_name}-backups-"
+}
+
+resource "aws_s3_bucket_public_access_block" "backups" {
+  bucket                  = aws_s3_bucket.backups.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = aws_kms_key.backups.arn
+      sse_algorithm     = "aws:kms"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "backups" {
+  bucket = aws_s3_bucket.backups.id
+  rule {
+    id     = "expire-old-backups"
+    status = "Enabled"
+    expiration {
+      days = 90
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
+resource "aws_ssm_parameter" "hostex_token" {
+  name        = "/${var.app_name}/hostex-access-token"
+  description = "Hostex API token; set the value after provisioning"
+  type        = "SecureString"
+  key_id      = aws_kms_key.backups.arn
+  value       = "REPLACE_ME"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_ssm_parameter" "app_secrets" {
+  name        = "/${var.app_name}/app-secrets"
+  description = "JSON containing POSTGRES_PASSWORD, ADMIN_PASSWORD and SESSION_SECRET"
+  type        = "SecureString"
+  key_id      = aws_kms_key.backups.arn
+  value       = jsonencode({ bootstrap = "REPLACE_ME" })
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_iam_role_policy" "application_data" {
+  name = "${var.app_name}-application-data"
+  role = aws_iam_role.ec2_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = [aws_ssm_parameter.hostex_token.arn, aws_ssm_parameter.app_secrets.arn]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey"]
+        Resource = aws_kms_key.backups.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
+        Resource = [aws_s3_bucket.backups.arn, "${aws_s3_bucket.backups.arn}/*"]
+      }
+    ]
+  })
+}
+
+resource "aws_ebs_volume" "app_data" {
+  availability_zone = aws_instance.app.availability_zone
+  size              = var.app_volume_size
+  type              = "gp3"
+  encrypted         = true
+  tags = {
+    Name = "${var.app_name}-data"
+  }
+}
+
+resource "aws_volume_attachment" "app_data" {
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.app_data.id
+  instance_id = aws_instance.app.id
+}
+
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "${var.app_name}-instance-profile"
   role = aws_iam_role.ec2_role.name
@@ -111,9 +226,10 @@ resource "aws_instance" "app" {
     aws_region     = var.aws_region
     repository_url = aws_ecr_repository.app.repository_url
     image_tag      = var.image_tag
-    container_port = var.container_port
-    host_port      = var.host_port
     app_name       = var.app_name
+    domain         = var.domain
+    backup_bucket  = aws_s3_bucket.backups.id
+    backup_kms_key = aws_kms_key.backups.arn
   })
 
   metadata_options {
@@ -122,5 +238,13 @@ resource "aws_instance" "app" {
 
   tags = {
     Name = var.app_name
+  }
+}
+
+resource "aws_eip" "app" {
+  domain   = "vpc"
+  instance = aws_instance.app.id
+  tags = {
+    Name = "${var.app_name}-eip"
   }
 }

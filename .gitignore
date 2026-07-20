@@ -3,10 +3,10 @@
 .venv/
 __pycache__/
 *.py[cod]
-
-.terraform/
+*.db
+.pytest_cache/
+dashboard/.next/
+dashboard/node_modules/
+infra/.terraform/
 *.tfstate
 *.tfstate.*
-*.tfvars
-*.tfplan
-crash.log

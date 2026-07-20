@@ -16,20 +16,20 @@ variable "app_name" {
   default     = "pricing-service"
 }
 
-variable "container_port" {
-  description = "Port your app listens on inside the container"
-  type        = number
-  default     = 8000
-}
-
-variable "host_port" {
-  description = "Port exposed on the EC2 host"
-  type        = number
-  default     = 80
-}
-
 variable "image_tag" {
   description = "Docker image tag to run"
   type        = string
   default     = "latest"
+}
+
+variable "domain" {
+  description = "Public dashboard domain"
+  type        = string
+  default     = "pricing.nicer.homes"
+}
+
+variable "app_volume_size" {
+  description = "Persistent application EBS volume size in GiB"
+  type        = number
+  default     = 20
 }

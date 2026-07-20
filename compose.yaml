@@ -1,0 +1,86 @@
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-pricing.nicer.homes}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [dashboard, api]
+    mem_limit: 64m
+
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8000
+    depends_on: [api]
+    mem_limit: 128m
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://pricing:${POSTGRES_PASSWORD}@db/pricing
+      COOKIE_SECURE: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 160m
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://pricing:${POSTGRES_PASSWORD}@db/pricing
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 128m
+
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    restart: "no"
+    profiles: ["scrape"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://pricing:${POSTGRES_PASSWORD}@db/pricing
+    depends_on:
+      db:
+        condition: service_healthy
+    shm_size: 128mb
+    mem_limit: 320m
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pricing
+      POSTGRES_USER: pricing
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "work_mem=2MB", "-c", "maintenance_work_mem=32MB", "-c", "max_connections=30"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pricing -d pricing"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 192m
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
