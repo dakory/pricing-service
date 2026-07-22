@@ -1,0 +1,23 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
+
+type Property = { id: number; name: string };
+const csrf = () => decodeURIComponent(document.cookie.split("; ").find(row => row.startsWith("pricing_csrf="))?.split("=")[1] ?? "");
+
+export function OverrideForm({ properties, selectedId, start, end }: { properties: Property[]; selectedId?: number; start: string; end: string }) {
+  const router = useRouter(); const [message, setMessage] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); const data = new FormData(event.currentTarget);
+    const price = data.get("price"); const stay = data.get("minimum_stay");
+    const payload = { property_id: Number(data.get("property_id")), start_date: data.get("start_date"), end_date: data.get("end_date"), price: price ? Number(price) : null, minimum_stay: stay ? Number(stay) : null, reason: data.get("reason") };
+    const response = await fetch("/api/overrides", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf() }, body: JSON.stringify(payload) });
+    const body = response.status === 204 ? {} : await response.json(); setMessage(response.ok ? "Override saved. Run shadow pricing to apply it." : body.detail); router.refresh();
+  }
+  return <form className="card override-form" onSubmit={submit}><b>Add hard override</b><div className="form-grid">
+    <label>Property<select name="property_id" defaultValue={selectedId}>{properties.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label>
+    <label>Start<input name="start_date" type="date" defaultValue={start} required/></label><label>End<input name="end_date" type="date" defaultValue={end} required/></label>
+    <label>Price (optional)<input name="price" type="number" min="1"/></label><label>Minimum stay<input name="minimum_stay" type="number" min="1"/></label>
+    <label className="wide">Reason<input name="reason" required placeholder="Owner lock, event, maintenance…"/></label></div><div className="form-actions"><button className="button">Save override</button><span className="muted">{message}</span></div></form>;
+}

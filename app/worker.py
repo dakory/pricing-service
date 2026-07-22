@@ -6,6 +6,8 @@ from app.jobs import daily_hostex_import, daily_pricing_run
 
 
 def create_scheduler() -> BlockingScheduler:
+    """Create the WITA scheduler with serialized import and pricing jobs."""
+
     settings = get_settings()
     scheduler = BlockingScheduler(timezone=settings.business_timezone)
     scheduler.add_job(
@@ -28,6 +30,8 @@ def create_scheduler() -> BlockingScheduler:
 
 
 def main():
+    """Start the blocking background-job scheduler."""
+
     scheduler = create_scheduler()
     scheduler.start()
 

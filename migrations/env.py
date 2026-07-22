@@ -16,6 +16,8 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline():
+    """Render migrations without opening a database connection."""
+
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
@@ -28,6 +30,8 @@ def run_migrations_offline():
 
 
 def run_migrations_online():
+    """Apply migrations through a live database connection."""
+
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

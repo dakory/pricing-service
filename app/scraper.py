@@ -11,6 +11,8 @@ class StructuralChangeError(RuntimeError):
 
 @dataclass(frozen=True)
 class ScrapedNight:
+    """Represent one parsed competitor calendar night."""
+
     stay_date: date
     price: int | None
     available: bool
@@ -20,15 +22,24 @@ class ScrapedNight:
 
 
 class CompetitorAdapter(ABC):
+    """Define the replaceable competitor-collection interface."""
+
     @abstractmethod
     async def collect(self, url: str) -> list[ScrapedNight]:
+        """Collect dated prices and availability from a competitor URL."""
+
         raise NotImplementedError
 
 
 class PlaywrightAirbnbAdapter(CompetitorAdapter):
+    """Collect Airbnb calendar payloads through a single browser context."""
+
+    # Increment when the accepted Airbnb payload structure changes.
     parser_version = "airbnb-v1"
 
     async def collect(self, url: str) -> list[ScrapedNight]:
+        """Load an Airbnb page and fail closed on unknown payload structures."""
+
         # Browser execution lives in the dedicated scraper image. Keeping this
         # boundary small allows replacement with a managed provider.
         try:

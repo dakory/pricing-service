@@ -7,6 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Load application configuration from environment variables."""
+
     database_url: str = "sqlite:///./pricing.db"
     admin_email: str = "admin@nicer.homes"
     admin_password: str = "change-me"
@@ -21,9 +23,13 @@ class Settings(BaseSettings):
 
     @property
     def timezone(self) -> ZoneInfo:
+        """Return the configured business timezone."""
+
         return ZoneInfo(self.business_timezone)
 
 
 @lru_cache
 def get_settings() -> Settings:
+    """Return the cached process-wide settings object."""
+
     return Settings()

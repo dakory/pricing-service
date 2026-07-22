@@ -10,18 +10,26 @@ import httpx
 
 
 class HostexError(RuntimeError):
+    """Represent a transport or body-level Hostex API failure."""
+
     def __init__(self, message: str, *, code: int | str | None = None, retry_after: float | None = None):
+        """Capture the Hostex code and optional retry delay."""
+
         super().__init__(message)
         self.code = code
         self.retry_after = retry_after
 
     @property
     def retryable(self) -> bool:
+        """Return whether Hostex identified the failure as rate limiting."""
+
         return str(self.code) == "429"
 
 
 @dataclass
 class PublishResult:
+    """Summarize one accepted Hostex price publication request."""
+
     accepted: int
     response: dict
 
@@ -68,6 +76,8 @@ class HostexClient:
         client: httpx.AsyncClient | None = None,
         max_attempts: int = 3,
     ):
+        """Create an authenticated Hostex client or wrap a supplied test client."""
+
         if not token:
             raise ValueError("Hostex access token is required")
         self.max_attempts = max_attempts
@@ -91,6 +101,8 @@ class HostexClient:
             )
 
     async def _request(self, method: str, path: str, **kwargs) -> dict:
+        """Send one request with bounded retries and body-error validation."""
+
         last_error: Exception | None = None
         for attempt in range(self.max_attempts):
             try:
@@ -122,6 +134,8 @@ class HostexClient:
         raise last_error  # pragma: no cover
 
     async def _all_pages(self, path: str, resource: str, **params) -> list[dict]:
+        """Retrieve every offset-based page for a Hostex collection."""
+
         offset, limit, collected = 0, 100, []
         while True:
             body = await self._request("GET", path, params={**params, "offset": offset, "limit": limit})
@@ -132,12 +146,18 @@ class HostexClient:
             offset += limit
 
     async def properties(self) -> list[dict]:
+        """Return all Hostex properties."""
+
         return await self._all_pages("/v3/properties", "properties")
 
     async def listings(self) -> list[dict]:
+        """Return all connected channel listings."""
+
         return await self._all_pages("/v3/listings", "listings")
 
     async def reservations(self, start_date: date, end_date: date) -> list[dict]:
+        """Return deduplicated reservations across valid 180-day windows."""
+
         records: list[dict] = []
         window_start = start_date
         while window_start <= end_date:
@@ -161,12 +181,16 @@ class HostexClient:
         return list(unique.values())
 
     async def pricing_ratios(self, property_id: int) -> list[dict]:
+        """Return channel pricing ratios for one Hostex property."""
+
         body = await self._request("GET", "/v3/pricing_ratios", params={"property_id": property_id})
         if isinstance(body.get("data"), dict) and isinstance(body["data"].get("channels"), list):
             return body["data"]["channels"]
         return response_items(body, "pricing_ratios")
 
     async def calendars(self, listings: list[dict], start_date: date, end_date: date) -> list[dict]:
+        """Return calendar data for a batch of channel listings."""
+
         body = await self._request(
             "POST",
             "/v3/listings/calendar",
@@ -183,12 +207,16 @@ class HostexClient:
             return response_items(body, "listings")
 
     async def publish_prices(self, listing_id: str, entries: list[dict]) -> PublishResult:
+        """Submit a batch of daily prices for one channel listing."""
+
         body = await self._request(
             "POST", "/v3/listings/prices", json={"listing_id": listing_id, "prices": entries}
         )
         return PublishResult(accepted=len(entries), response=body)
 
     async def calendar(self, listing_id: str, start: str, end: str, channel_type: str = "booking_site") -> dict:
+        """Return raw calendar data for one listing and date range."""
+
         body = await self._request(
             "POST",
             "/v3/listings/calendar",
@@ -201,5 +229,7 @@ class HostexClient:
         return body
 
     async def close(self):
+        """Close the internally owned HTTP client."""
+
         if self._owns_client:
             await self.client.aclose()

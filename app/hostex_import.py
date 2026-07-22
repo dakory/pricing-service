@@ -11,37 +11,47 @@ from app.hostex import HostexClient, HostexError
 from app.models import HostexCalendarDay, HostexListing, Property, Reservation
 
 
-def first(item: dict, *keys: str, default=None):
+def first_present_value(item: dict, *keys: str, default=None):
+    """Return the first non-null value among alternate Hostex field names."""
+
     for key in keys:
         if item.get(key) is not None:
             return item[key]
     return default
 
 
-def as_int(value: Any) -> int | None:
+def parse_integer(value: Any) -> int | None:
+    """Parse an optional integer without raising on malformed API data."""
+
     try:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
 
 
-def as_decimal(value: Any) -> Decimal | None:
+def parse_decimal(value: Any) -> Decimal | None:
+    """Parse an optional decimal from a scalar or amount wrapper."""
+
     if isinstance(value, dict):
-        value = first(value, "amount", "value")
+        value = first_present_value(value, "amount", "value")
     try:
         return Decimal(str(value)) if value is not None else None
     except (InvalidOperation, ValueError):
         return None
 
 
-def as_date(value: Any) -> date | None:
+def parse_date(value: Any) -> date | None:
+    """Parse an ISO date while tolerating a trailing timestamp."""
+
     try:
         return date.fromisoformat(str(value)[:10]) if value else None
     except ValueError:
         return None
 
 
-def as_datetime(value: Any) -> datetime | None:
+def parse_datetime(value: Any) -> datetime | None:
+    """Parse an ISO timestamp and normalize missing timezone data to UTC."""
+
     if not value:
         return None
     try:
@@ -52,19 +62,23 @@ def as_datetime(value: Any) -> datetime | None:
 
 
 def external_property_id(item: dict) -> int | None:
-    value = first(item, "property_id", "propertyId")
+    """Extract a Hostex property identifier from supported response shapes."""
+
+    value = first_present_value(item, "property_id", "propertyId")
     if value is None and isinstance(item.get("property"), dict):
-        value = first(item["property"], "id", "property_id")
-    return as_int(value)
+        value = first_present_value(item["property"], "id", "property_id")
+    return parse_integer(value)
 
 
 def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
+    """Create or refresh local property mappings from Hostex records."""
+
     created = updated = 0
     for record in records:
-        external_id = as_int(first(record, "id", "property_id"))
+        external_id = parse_integer(first_present_value(record, "id", "property_id"))
         if external_id is None:
             raise HostexError("Hostex property is missing id")
-        name = str(first(record, "name", "property_name", "title", default=f"Hostex property {external_id}"))
+        name = str(first_present_value(record, "name", "property_name", "title", default=f"Hostex property {external_id}"))
         item = db.scalar(select(Property).where(Property.hostex_property_id == external_id))
         if item:
             item.name = name
@@ -94,17 +108,19 @@ def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
 
 
 def property_channel_map(property_records: list[dict]) -> dict[tuple[str, str], int]:
+    """Map channel listing identifiers to their Hostex property identifiers."""
+
     mapping = {}
     for record in property_records:
-        property_id = as_int(first(record, "id", "property_id"))
+        property_id = parse_integer(first_present_value(record, "id", "property_id"))
         channels = record.get("channels")
         if property_id is None or not isinstance(channels, list):
             continue
         for channel in channels:
             if not isinstance(channel, dict):
                 continue
-            listing_id = first(channel, "listing_id", "listingId")
-            channel_type = first(channel, "channel_type", "channelType")
+            listing_id = first_present_value(channel, "listing_id", "listingId")
+            channel_type = first_present_value(channel, "channel_type", "channelType")
             if listing_id is not None and channel_type is not None:
                 mapping[(str(listing_id), str(channel_type))] = property_id
     return mapping
@@ -113,12 +129,14 @@ def property_channel_map(property_records: list[dict]) -> dict[tuple[str, str], 
 def upsert_listings(
     db: Session, records: list[dict], property_records: list[dict] | None = None
 ) -> tuple[int, int]:
+    """Create or refresh channel listings and link them to properties."""
+
     created = updated = 0
     properties = {item.hostex_property_id: item for item in db.scalars(select(Property)) if item.hostex_property_id}
     channel_map = property_channel_map(property_records or [])
     for record in records:
-        listing_id = first(record, "listing_id", "listingId", "id")
-        channel_type = first(record, "channel_type", "channelType", "channel")
+        listing_id = first_present_value(record, "listing_id", "listingId", "id")
+        channel_type = first_present_value(record, "channel_type", "channelType", "channel")
         if listing_id is None or channel_type is None:
             raise HostexError("Hostex listing is missing listing_id or channel_type")
         listing_id, channel_type = str(listing_id), str(channel_type)
@@ -132,8 +150,8 @@ def upsert_listings(
         values = {
             "property_id": prop.id if prop else None,
             "hostex_property_id": ext_property_id,
-            "channel_account_id": as_int(first(record, "channel_account_id", "channelAccountId")),
-            "readonly": bool(first(record, "readonly", "read_only", default=False)),
+            "channel_account_id": parse_integer(first_present_value(record, "channel_account_id", "channelAccountId")),
+            "readonly": bool(first_present_value(record, "readonly", "read_only", default=False)),
             "raw": record,
             "imported_at": datetime.now(timezone.utc),
         }
@@ -152,13 +170,15 @@ def upsert_listings(
 
 
 def upsert_reservations(db: Session, records: list[dict]) -> tuple[int, int, int]:
+    """Create or refresh reservations while reporting unmappable records."""
+
     created = updated = skipped = 0
     properties = {item.hostex_property_id: item for item in db.scalars(select(Property)) if item.hostex_property_id}
     for record in records:
         prop = properties.get(external_property_id(record))
-        reservation_id = first(record, "reservation_code", "reservation_id", "stay_code", "id")
-        check_in = as_date(first(record, "check_in_date", "check_in", "arrival_date"))
-        check_out = as_date(first(record, "check_out_date", "check_out", "departure_date"))
+        reservation_id = first_present_value(record, "reservation_code", "reservation_id", "stay_code", "id")
+        check_in = parse_date(first_present_value(record, "check_in_date", "check_in", "arrival_date"))
+        check_out = parse_date(first_present_value(record, "check_out_date", "check_out", "departure_date"))
         if not prop or reservation_id is None or not check_in or not check_out:
             skipped += 1
             continue
@@ -168,8 +188,8 @@ def upsert_reservations(db: Session, records: list[dict]) -> tuple[int, int, int
         values = {
             "check_in": check_in,
             "check_out": check_out,
-            "booked_at": as_datetime(first(record, "booked_at", "created_at")),
-            "status": str(first(record, "status", "reservation_status", default="accepted")),
+            "booked_at": parse_datetime(first_present_value(record, "booked_at", "created_at")),
+            "status": str(first_present_value(record, "status", "reservation_status", default="accepted")),
         }
         if item:
             for key, value in values.items():
@@ -183,25 +203,29 @@ def upsert_reservations(db: Session, records: list[dict]) -> tuple[int, int, int
 
 
 def calendar_nights(records: list[dict]) -> Iterable[tuple[str, str, dict]]:
+    """Flatten supported Hostex calendar envelopes into listing-day tuples."""
+
     for record in records:
-        listing_id = first(record, "listing_id", "listingId")
-        channel_type = first(record, "channel_type", "channelType")
-        nights = first(record, "calendar", "calendars", "dates", "days")
+        listing_id = first_present_value(record, "listing_id", "listingId")
+        channel_type = first_present_value(record, "channel_type", "channelType")
+        nights = first_present_value(record, "calendar", "calendars", "dates", "days")
         if listing_id is not None and isinstance(nights, list):
             for night in nights:
                 if isinstance(night, dict):
                     yield str(listing_id), str(channel_type or "booking_site"), night
-        elif listing_id is not None and as_date(first(record, "date", "stay_date")):
+        elif listing_id is not None and parse_date(first_present_value(record, "date", "stay_date")):
             yield str(listing_id), str(channel_type or "booking_site"), record
 
 
 def upsert_calendars(db: Session, records: list[dict]) -> tuple[int, int, int]:
+    """Create or refresh imported listing calendar days."""
+
     created = updated = skipped = 0
     listings = {
         (item.listing_id, item.channel_type): item for item in db.scalars(select(HostexListing))
     }
     for listing_id, channel_type, night in calendar_nights(records):
-        stay_date = as_date(first(night, "date", "stay_date"))
+        stay_date = parse_date(first_present_value(night, "date", "stay_date"))
         if not stay_date:
             skipped += 1
             continue
@@ -216,9 +240,9 @@ def upsert_calendars(db: Session, records: list[dict]) -> tuple[int, int, int]:
         restrictions = night.get("restrictions") if isinstance(night.get("restrictions"), dict) else {}
         values = {
             "property_id": listing.property_id if listing else None,
-            "price": as_decimal(first(night, "price", "nightly_price", "rate")),
-            "inventory": as_int(first(night, "inventory", "available")),
-            "minimum_stay": as_int(first(night, "minimum_stay", "min_stay", default=restrictions.get("min_stay"))),
+            "price": parse_decimal(first_present_value(night, "price", "nightly_price", "rate")),
+            "inventory": parse_integer(first_present_value(night, "inventory", "available")),
+            "minimum_stay": parse_integer(first_present_value(night, "minimum_stay", "min_stay", default=restrictions.get("min_stay"))),
             "raw": night,
             "imported_at": datetime.now(timezone.utc),
         }
@@ -241,6 +265,8 @@ def upsert_calendars(db: Session, records: list[dict]) -> tuple[int, int, int]:
 
 
 async def import_hostex(db: Session, client: HostexClient, *, today: date | None = None) -> dict:
+    """Import and atomically persist read-only Hostex portfolio data."""
+
     today = today or date.today()
     properties = await client.properties()
     property_counts = upsert_properties(db, properties)
@@ -251,12 +277,12 @@ async def import_hostex(db: Session, client: HostexClient, *, today: date | None
 
     calendar_listings = [
         {
-            "listing_id": str(first(item, "listing_id", "listingId", "id")),
-            "channel_type": str(first(item, "channel_type", "channelType", "channel")),
+            "listing_id": str(first_present_value(item, "listing_id", "listingId", "id")),
+            "channel_type": str(first_present_value(item, "channel_type", "channelType", "channel")),
         }
         for item in listings
-        if first(item, "listing_id", "listingId", "id") is not None
-        and first(item, "channel_type", "channelType", "channel") is not None
+        if first_present_value(item, "listing_id", "listingId", "id") is not None
+        and first_present_value(item, "channel_type", "channelType", "channel") is not None
     ]
     calendar_records = []
     for start in range(0, len(calendar_listings), 20):

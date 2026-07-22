@@ -12,6 +12,8 @@ from app.database import Base
 
 
 class RunKind(str, enum.Enum):
+    """Enumerate the background workflows recorded by the service."""
+
     scrape = "scrape"
     import_ = "import"
     optimize = "optimize"
@@ -20,6 +22,8 @@ class RunKind(str, enum.Enum):
 
 
 class RunStatus(str, enum.Enum):
+    """Enumerate terminal and active background-run states."""
+
     running = "running"
     succeeded = "succeeded"
     failed = "failed"
@@ -27,6 +31,8 @@ class RunStatus(str, enum.Enum):
 
 
 class Property(Base):
+    """Store one managed property and its editable pricing policy."""
+
     __tablename__ = "properties"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -52,6 +58,8 @@ class Property(Base):
 
 
 class HostexListing(Base):
+    """Store a channel listing imported from Hostex."""
+
     __tablename__ = "hostex_listings"
     __table_args__ = (UniqueConstraint("channel_type", "listing_id"),)
 
@@ -68,6 +76,8 @@ class HostexListing(Base):
 
 
 class HostexCalendarDay(Base):
+    """Store one imported channel-listing calendar day."""
+
     __tablename__ = "hostex_calendar_days"
     __table_args__ = (UniqueConstraint("listing_id", "channel_type", "stay_date"),)
 
@@ -84,6 +94,8 @@ class HostexCalendarDay(Base):
 
 
 class Reservation(Base):
+    """Store a reservation imported from Hostex."""
+
     __tablename__ = "reservations"
     __table_args__ = (UniqueConstraint("property_id", "hostex_id"),)
 
@@ -97,6 +109,8 @@ class Reservation(Base):
 
 
 class CompetitorObservation(Base):
+    """Store one dated competitor price and availability observation."""
+
     __tablename__ = "competitor_observations"
     __table_args__ = (UniqueConstraint("url", "stay_date", "scraped_at"),)
 
@@ -112,6 +126,8 @@ class CompetitorObservation(Base):
 
 
 class Recommendation(Base):
+    """Store one explainable property-date pricing recommendation."""
+
     __tablename__ = "recommendations"
     __table_args__ = (UniqueConstraint("property_id", "stay_date"),)
 
@@ -130,6 +146,8 @@ class Recommendation(Base):
 
 
 class Override(Base):
+    """Store a hard price or minimum-stay lock for a date range."""
+
     __tablename__ = "overrides"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -143,6 +161,8 @@ class Override(Base):
 
 
 class Run(Base):
+    """Record execution status and results for an operational workflow."""
+
     __tablename__ = "runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -155,6 +175,8 @@ class Run(Base):
 
 
 class Setting(Base):
+    """Store a small JSON-backed application setting."""
+
     __tablename__ = "settings"
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
@@ -162,6 +184,8 @@ class Setting(Base):
 
 
 class AdminSession(Base):
+    """Store a hashed single-administrator browser session."""
+
     __tablename__ = "admin_sessions"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)

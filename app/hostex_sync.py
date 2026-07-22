@@ -8,6 +8,8 @@ from app.hostex_import import import_hostex
 
 
 async def main():
+    """Import live Hostex data and print a non-sensitive summary."""
+
     settings = get_settings()
     if not settings.hostex_access_token:
         raise SystemExit("HOSTEX_ACCESS_TOKEN is not configured")

@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from app.api import router
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    """Provide the application lifespan hook for future startup resources."""
+
     yield
 
 
@@ -14,9 +16,13 @@ app.include_router(router)
 
 @app.get("/")
 def root():
+    """Return basic service identity and availability."""
+
     return {"status": "ok", "service": "pricing-api"}
 
 
 @app.get("/health")
 def health():
+    """Return the lightweight container health response."""
+
     return {"health": "ok"}
