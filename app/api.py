@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import clear_session, create_session, digest, require_csrf, require_session, verify_admin
+from app.config import get_settings
 from app.database import get_db
-from app.models import AdminSession, Override, Property, Recommendation, Run, Setting
+from app.hostex import HostexClient, HostexError
+from app.hostex_import import import_hostex
+from app.models import AdminSession, HostexCalendarDay, HostexListing, Override, Property, Recommendation, Run, Setting
+from app.models import RunKind, RunStatus
 from app.schemas import ModeUpdate, OverrideCreate, PropertyCreate, PropertyRead, PropertyUpdate
 
 router = APIRouter(prefix="/api")
@@ -139,6 +143,112 @@ def runs(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
         }
         for item in items
     ]
+
+
+@router.get("/integrations/hostex", dependencies=[Depends(require_session)])
+def hostex_status(db: Session = Depends(get_db)):
+    settings = get_settings()
+    last_run = db.scalar(select(Run).where(Run.kind == RunKind.import_).order_by(Run.started_at.desc()).limit(1))
+    return {
+        "configured": bool(settings.hostex_access_token),
+        "mode": "read_only",
+        "last_import": None
+        if not last_run
+        else {
+            "id": last_run.id,
+            "status": last_run.status.value,
+            "started_at": last_run.started_at,
+            "finished_at": last_run.finished_at,
+            "summary": last_run.summary,
+            "error": last_run.error,
+        },
+    }
+
+
+@router.get("/hostex/listings", dependencies=[Depends(require_session)])
+def hostex_listings(db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(HostexListing, Property.name)
+        .outerjoin(Property, HostexListing.property_id == Property.id)
+        .order_by(Property.name, HostexListing.channel_type, HostexListing.listing_id)
+    ).all()
+    return [
+        {
+            "id": listing.id,
+            "property_id": listing.property_id,
+            "property_name": property_name,
+            "listing_id": listing.listing_id,
+            "channel_type": listing.channel_type,
+            "readonly": listing.readonly,
+            "pricing_ratio": listing.pricing_ratio,
+            "imported_at": listing.imported_at,
+        }
+        for listing, property_name in rows
+    ]
+
+
+@router.get("/hostex/calendar", dependencies=[Depends(require_session)])
+def hostex_calendar(
+    listing_id: str,
+    channel_type: str,
+    start: date = Query(default_factory=date.today),
+    end: date = Query(default_factory=lambda: date.today() + timedelta(days=31)),
+    db: Session = Depends(get_db),
+):
+    if end < start or (end - start).days > 370:
+        raise HTTPException(422, "Date range must be between 0 and 370 days")
+    rows = db.scalars(
+        select(HostexCalendarDay)
+        .where(
+            HostexCalendarDay.listing_id == listing_id,
+            HostexCalendarDay.channel_type == channel_type,
+            HostexCalendarDay.stay_date.between(start, end),
+        )
+        .order_by(HostexCalendarDay.stay_date)
+    ).all()
+    return [
+        {
+            "date": row.stay_date,
+            "price": row.price,
+            "inventory": row.inventory,
+            "minimum_stay": row.minimum_stay,
+            "imported_at": row.imported_at,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/imports/hostex", dependencies=[Depends(require_csrf)])
+async def run_hostex_import(db: Session = Depends(get_db)):
+    settings = get_settings()
+    if not settings.hostex_access_token:
+        raise HTTPException(409, "HOSTEX_ACCESS_TOKEN is not configured")
+    running = db.scalar(
+        select(Run).where(Run.kind == RunKind.import_, Run.status == RunStatus.running).limit(1)
+    )
+    if running:
+        raise HTTPException(409, "A Hostex import is already running")
+    run = Run(kind=RunKind.import_, status=RunStatus.running)
+    db.add(run)
+    db.commit()
+    client = HostexClient(settings.hostex_access_token, settings.hostex_base_url)
+    try:
+        summary = await import_hostex(db, client)
+        run.status = RunStatus.succeeded
+        run.summary = summary
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return {"run_id": run.id, "status": run.status.value, "summary": summary}
+    except HostexError as exc:
+        db.rollback()
+        run = db.get(Run, run.id)
+        run.status = RunStatus.failed
+        run.error = str(exc)
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(502, "Hostex import failed; see run history") from exc
+    finally:
+        await client.close()
 
 
 @router.get("/settings/mode", dependencies=[Depends(require_session)])

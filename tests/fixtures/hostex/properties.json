@@ -1,0 +1,14 @@
+{
+  "data": {
+    "properties": [
+      {
+        "id": 101,
+        "name": "Bingin Garden Villa",
+        "channels": [
+          {"listing_id": "booking-site-101", "channel_type": "booking_site", "currency": "IDR"},
+          {"listing_id": "airbnb-101", "channel_type": "airbnb", "currency": "IDR"}
+        ]
+      }
+    ]
+  }
+}

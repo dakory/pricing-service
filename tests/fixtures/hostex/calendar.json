@@ -1,0 +1,24 @@
+{
+  "data": {
+    "calendars": [
+      {
+        "listing_id": "booking-site-101",
+        "channel_type": "booking_site",
+        "calendar": [
+          {
+            "date": "2026-07-20",
+            "price": 1450000,
+            "inventory": 1,
+            "restrictions": {"min_stay": 2}
+          },
+          {
+            "date": "2026-07-21",
+            "price": 1500000,
+            "inventory": 0,
+            "restrictions": {"min_stay": 3}
+          }
+        ]
+      }
+    ]
+  }
+}

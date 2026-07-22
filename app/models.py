@@ -31,6 +31,7 @@ class Property(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
+    hostex_property_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
     hostex_listing_id: Mapped[str] = mapped_column(String(100), unique=True)
     booking_site_listing_id: Mapped[Optional[str]] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -48,6 +49,38 @@ class Property(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     recommendations: Mapped[list["Recommendation"]] = relationship(back_populates="property")
+
+
+class HostexListing(Base):
+    __tablename__ = "hostex_listings"
+    __table_args__ = (UniqueConstraint("channel_type", "listing_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    property_id: Mapped[Optional[int]] = mapped_column(ForeignKey("properties.id"))
+    hostex_property_id: Mapped[Optional[int]] = mapped_column(Integer)
+    listing_id: Mapped[str] = mapped_column(String(150))
+    channel_type: Mapped[str] = mapped_column(String(50))
+    channel_account_id: Mapped[Optional[int]] = mapped_column(Integer)
+    readonly: Mapped[bool] = mapped_column(Boolean, default=False)
+    pricing_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 3))
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class HostexCalendarDay(Base):
+    __tablename__ = "hostex_calendar_days"
+    __table_args__ = (UniqueConstraint("listing_id", "channel_type", "stay_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    property_id: Mapped[Optional[int]] = mapped_column(ForeignKey("properties.id"))
+    listing_id: Mapped[str] = mapped_column(String(150))
+    channel_type: Mapped[str] = mapped_column(String(50))
+    stay_date: Mapped[date] = mapped_column(Date)
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
+    inventory: Mapped[Optional[int]] = mapped_column(Integer)
+    minimum_stay: Mapped[Optional[int]] = mapped_column(Integer)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class Reservation(Base):

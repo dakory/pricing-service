@@ -7,6 +7,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         <div className="brand">Nicer Homes<br />Pricing</div>
         <nav>
           <Link href="/">Portfolio calendar</Link>
+          <Link href="/hostex">Hostex calendars</Link>
           <Link href="/properties">Properties</Link>
           <Link href="/competitors">Competitor freshness</Link>
           <Link href="/runs">Run history</Link>
@@ -17,4 +18,3 @@ export function Shell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
-

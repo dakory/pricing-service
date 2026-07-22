@@ -38,5 +38,14 @@ th { color: var(--muted); font-weight: 600; }
 .field { display: grid; gap: 6px; margin: 14px 0; }
 .field input { border: 1px solid var(--line); padding: 11px; border-radius: 7px; }
 .error { color: #a53b31; }
+.hostex-layout { display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 24px; }
+.listing-list { padding: 0; overflow: hidden; }
+.listing-list > b { display: block; padding: 18px; border-bottom: 1px solid var(--line); }
+.listing-links { max-height: 70vh; overflow: auto; }
+.listing-link { display: grid; gap: 3px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.listing-link small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.listing-link:hover, .listing-link.selected { background: #e5ede7; }
+.date-filter { display: flex; gap: 8px; flex-wrap: wrap; }
+.date-filter input { border: 1px solid var(--line); background: var(--card); padding: 8px; border-radius: 7px; }
 @media (max-width: 800px) { .shell { grid-template-columns: 1fr; } aside { display: none; } main { padding: 22px; } .stats { grid-template-columns: 1fr 1fr; } }
-
+@media (max-width: 1000px) { .hostex-layout { grid-template-columns: 1fr; } .listing-links { max-height: 300px; } }

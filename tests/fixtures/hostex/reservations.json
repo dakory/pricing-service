@@ -1,0 +1,15 @@
+{
+  "data": {
+    "reservations": [
+      {
+        "reservation_code": "HX-BOOKING-1",
+        "property_id": 101,
+        "check_in_date": "2026-07-25",
+        "check_out_date": "2026-07-29",
+        "booked_at": "2026-06-11T10:00:00Z",
+        "status": "accepted",
+        "channel_type": "booking.com"
+      }
+    ]
+  }
+}

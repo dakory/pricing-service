@@ -1,0 +1,20 @@
+{
+  "data": {
+    "listings": [
+      {
+        "property_id": 101,
+        "listing_id": "booking-site-101",
+        "channel_type": "booking_site",
+        "channel_account_id": 9,
+        "readonly": false
+      },
+      {
+        "property_id": 101,
+        "listing_id": "airbnb-101",
+        "channel_type": "airbnb",
+        "channel_account_id": 10,
+        "readonly": false
+      }
+    ]
+  }
+}
