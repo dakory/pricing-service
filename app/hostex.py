@@ -162,6 +162,8 @@ class HostexClient:
 
     async def pricing_ratios(self, property_id: int) -> list[dict]:
         body = await self._request("GET", "/v3/pricing_ratios", params={"property_id": property_id})
+        if isinstance(body.get("data"), dict) and isinstance(body["data"].get("channels"), list):
+            return body["data"]["channels"]
         return response_items(body, "pricing_ratios")
 
     async def calendars(self, listings: list[dict], start_date: date, end_date: date) -> list[dict]:

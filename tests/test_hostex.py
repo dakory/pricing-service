@@ -139,3 +139,30 @@ def test_body_rate_limit_retries_then_succeeds(monkeypatch):
 
     asyncio.run(run())
     assert attempts == 2
+
+
+def test_pricing_ratios_support_live_data_channels_envelope():
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "error_code": 0,
+                "data": {
+                    "link_type": "property",
+                    "link_id": 101,
+                    "channels": [
+                        {"channel_type": "booking_site", "listing_id": "direct-101", "ratio": 100}
+                    ],
+                },
+            },
+        )
+
+    async def run():
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://api.hostex.test")
+        client = HostexClient("token", client=http)
+        ratios = await client.pricing_ratios(101)
+        assert ratios[0]["channel_type"] == "booking_site"
+        assert ratios[0]["ratio"] == 100
+        await http.aclose()
+
+    asyncio.run(run())
