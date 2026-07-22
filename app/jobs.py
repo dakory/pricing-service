@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import SessionLocal
 from app.hostex import HostexClient
+from app.hostex_import import import_hostex
 from app.models import Override, Property, Recommendation, Run, RunKind, RunStatus, Setting
 from app.pricing import calculate_price
 
@@ -31,10 +32,14 @@ def serialized_run(db: Session, kind: RunKind):
     db.commit()
     try:
         yield run
-        run.status = RunStatus.succeeded
+        if run.status == RunStatus.running:
+            run.status = RunStatus.succeeded
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
     except Exception as exc:
+        run_id = run.id
+        db.rollback()
+        run = db.get(Run, run_id)
         run.status = RunStatus.failed
         run.error = str(exc)
         run.finished_at = datetime.now(timezone.utc)
@@ -161,3 +166,23 @@ def daily_pricing_run():
         optimized = optimize(db)
         published = asyncio.run(publish(db))
         run.summary = {"optimized": optimized, "published": published}
+
+
+def daily_hostex_import():
+    settings = get_settings()
+    with SessionLocal() as db, serialized_run(db, RunKind.import_) as run:
+        if run is None:
+            return
+        if not settings.hostex_access_token:
+            run.status = RunStatus.skipped
+            run.summary = {"reason": "HOSTEX_ACCESS_TOKEN is not configured"}
+            return
+        client = HostexClient(settings.hostex_access_token, settings.hostex_base_url)
+
+        async def execute():
+            try:
+                return await import_hostex(db, client)
+            finally:
+                await client.close()
+
+        run.summary = asyncio.run(execute())
