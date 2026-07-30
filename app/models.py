@@ -31,7 +31,7 @@ class RunStatus(str, enum.Enum):
 
 
 class Property(Base):
-    """Store one managed property and its editable pricing policy."""
+    """Store one managed property and its Pricing Engine v2 bounds."""
 
     __tablename__ = "properties"
 
@@ -41,14 +41,9 @@ class Property(Base):
     hostex_listing_id: Mapped[str] = mapped_column(String(100), unique=True)
     booking_site_listing_id: Mapped[Optional[str]] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    base_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     min_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     max_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     rounding_increment: Mapped[int] = mapped_column(Integer, default=50_000)
-    season_factors: Mapped[dict] = mapped_column(JSON, default=dict)
-    weekday_factors: Mapped[dict] = mapped_column(JSON, default=dict)
-    minimum_stay_rules: Mapped[dict] = mapped_column(JSON, default=dict)
-    orphan_gap_rules: Mapped[dict] = mapped_column(JSON, default=dict)
     weekly_discount: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     monthly_discount: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     competitor_urls: Mapped[list] = mapped_column(JSON, default=list)
@@ -137,8 +132,6 @@ class Recommendation(Base):
     actual_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
     recommended_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     published_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
-    minimum_stay: Mapped[int] = mapped_column(Integer, default=1)
-    published_minimum_stay: Mapped[Optional[int]] = mapped_column(Integer)
     explanation: Mapped[dict] = mapped_column(JSON)
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -146,7 +139,7 @@ class Recommendation(Base):
 
 
 class Override(Base):
-    """Store a hard price or minimum-stay lock for a date range."""
+    """Store a hard price lock for a date range."""
 
     __tablename__ = "overrides"
 
@@ -155,7 +148,6 @@ class Override(Base):
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date] = mapped_column(Date)
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
-    minimum_stay: Mapped[Optional[int]] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 

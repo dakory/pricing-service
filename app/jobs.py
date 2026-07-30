@@ -4,15 +4,15 @@ import asyncio
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import HostexCalendarDay, HostexListing, Override, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
-from app.pricing import calculate_price
+from app.models import CompetitorObservation, HostexCalendarDay, HostexListing, Override, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
 JOB_LOCK = 7_324_502
@@ -54,7 +54,7 @@ def serialized_run(db: Session, kind: RunKind):
 
 
 def active_override(db: Session, property_id: int, stay_date: date) -> Override | None:
-    """Return the newest hard override that covers a property date."""
+    """Return the newest manual price override covering a property date."""
 
     return db.scalar(
         select(Override)
@@ -106,64 +106,98 @@ def property_availability(db: Session, prop: Property, start: date, days: int) -
     return by_date, unavailable, latest
 
 
-def rolling_occupancy(stay_date: date, unavailable: set[date], horizon_end: date, window: int = 30) -> float:
-    """Calculate forward occupancy within the configured rolling window."""
+def pricing_configuration(db: Session) -> dict:
+    """Return persisted Pricing Engine v2 configuration or safe defaults."""
 
-    end = min(horizon_end, stay_date + timedelta(days=window))
-    total = max(1, (end - stay_date).days)
-    return sum(stay_date + timedelta(days=offset) in unavailable for offset in range(total)) / total
+    setting = db.get(Setting, "pricing_engine_v2")
+    return {**DEFAULT_PRICING_CONFIGURATION, **(setting.value if setting else {})}
 
 
-def orphan_gap_length(stay_date: date, unavailable: set[date], horizon_start: date, horizon_end: date) -> int | None:
-    """Return the bounded available gap containing a date, when one exists."""
+def latest_competitor_observations(
+    db: Session, prop: Property, start: date, horizon_end: date
+) -> dict[date, dict[str, CompetitorObservation]]:
+    """Group the latest prepared observation by stay date and competitor URL."""
 
-    if stay_date in unavailable:
-        return None
-    left = stay_date
-    while left > horizon_start and left - timedelta(days=1) not in unavailable:
-        left -= timedelta(days=1)
-    right = stay_date
-    while right + timedelta(days=1) < horizon_end and right + timedelta(days=1) not in unavailable:
-        right += timedelta(days=1)
-    bounded_left = left > horizon_start or left - timedelta(days=1) in unavailable
-    bounded_right = right + timedelta(days=1) >= horizon_end or right + timedelta(days=1) in unavailable
-    return (right - left).days + 1 if bounded_left and bounded_right else None
+    if not prop.competitor_urls:
+        return {}
+    observations = db.scalars(
+        select(CompetitorObservation)
+        .where(
+            CompetitorObservation.property_id == prop.id,
+            CompetitorObservation.url.in_(prop.competitor_urls),
+            CompetitorObservation.stay_date >= start,
+            CompetitorObservation.stay_date < horizon_end,
+        )
+        .order_by(CompetitorObservation.scraped_at.desc())
+    ).all()
+    latest: dict[date, dict[str, CompetitorObservation]] = {}
+    for observation in observations:
+        latest.setdefault(observation.stay_date, {}).setdefault(
+            observation.url, observation
+        )
+    return latest
 
 
 def generate_price_recommendations(
     db: Session, horizon_days: int = 365, today: date | None = None
 ) -> int:
-    """Generate and persist baseline shadow recommendations for active properties."""
+    """Generate and persist Pricing Engine v2 recommendations for free dates."""
 
     settings = get_settings()
     today = today or datetime.now(settings.timezone).date()
     horizon_end = today + timedelta(days=horizon_days)
+    properties = list(db.scalars(select(Property).where(Property.active.is_(True))))
+    availability = {
+        prop.id: property_availability(db, prop, today, horizon_days)
+        for prop in properties
+    }
+    configuration = pricing_configuration(db)
+    db.execute(
+        delete(Recommendation).where(
+            Recommendation.stay_date >= today,
+            Recommendation.stay_date < horizon_end,
+        )
+    )
     count = 0
-    for prop in db.scalars(select(Property).where(Property.active.is_(True))):
-        calendar, unavailable, imported_at = property_availability(db, prop, today, horizon_days)
+    for prop in properties:
+        calendar, unavailable, imported_at = availability[prop.id]
+        observations = latest_competitor_observations(
+            db, prop, today, horizon_end
+        )
         stale = imported_at is None or imported_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(hours=36)
         for offset in range(horizon_days):
             stay_date = today + timedelta(days=offset)
+            if stay_date in unavailable:
+                continue
+            by_url = observations.get(stay_date, {})
+            available_prices = [
+                float(observation.price)
+                for observation in by_url.values()
+                if observation.available and observation.price is not None
+            ]
+            if not available_prices:
+                continue
             override = active_override(db, prop.id, stay_date)
             current = calendar.get(stay_date)
-            gap_length = orphan_gap_length(stay_date, unavailable, today, horizon_end)
-            occupancy = rolling_occupancy(stay_date, unavailable, horizon_end)
+            booked_property_count = sum(
+                stay_date in property_availability_data[1]
+                for property_availability_data in availability.values()
+            )
             result = calculate_price(
                 stay_date=stay_date,
-                today=today,
-                base_price=float(prop.base_price),
-                min_price=float(prop.min_price),
-                max_price=float(prop.max_price),
-                rounding_increment=prop.rounding_increment,
-                season_factor=float(prop.season_factors.get(str(stay_date.month), 1)),
-                weekday_factor=float(prop.weekday_factors.get(str(stay_date.weekday()), 1)),
-                apply_booking_pace=False,
-                forward_occupancy=occupancy,
-                gap_length=gap_length,
-                default_minimum_stay=int(prop.minimum_stay_rules.get("default", 1)),
-                gap_rules=prop.orphan_gap_rules,
-                override_price=float(override.price) if override and override.price is not None else None,
-                override_minimum_stay=override.minimum_stay if override else None,
+                current_date=today,
+                available_competitor_prices=available_prices,
+                unavailable_competitor_count=sum(
+                    not observation.available for observation in by_url.values()
+                ),
+                all_tracked_competitor_count=len(prop.competitor_urls),
+                booked_own_property_count=booked_property_count,
+                all_own_property_count=len(properties),
+                minimum_price=float(prop.min_price),
+                maximum_price=float(prop.max_price),
+                pricing_step=prop.rounding_increment,
+                configuration=configuration,
+                manual_override=float(override.price) if override else None,
             )
             warnings = []
             if stale:
@@ -179,18 +213,9 @@ def generate_price_recommendations(
                 warnings.append("price_at_bound")
             result["explanation"].update(
                 {
-                    "engine_version": "baseline-v1",
-                    "canonical_base_price": float(prop.base_price),
                     "minimum_price": float(prop.min_price),
                     "maximum_price": float(prop.max_price),
-                    "season_factor": float(prop.season_factors.get(str(stay_date.month), 1)),
-                    "weekday_factor": float(prop.weekday_factors.get(str(stay_date.weekday()), 1)),
-                    "orphan_gap_length": gap_length,
                     "current_inventory": current.inventory if current else None,
-                    "current_minimum_stay": current.minimum_stay if current else None,
-                    "default_minimum_stay": int(prop.minimum_stay_rules.get("default", 1)),
-                    "final_minimum_stay": result["minimum_stay"],
-                    "final_recommended_price": result["price"],
                     "hostex_imported_at": imported_at.isoformat() if imported_at else None,
                     "change_percentage": change_pct,
                     "warnings": warnings,
@@ -204,7 +229,6 @@ def generate_price_recommendations(
             if existing:
                 existing.actual_price = current.price if current else None
                 existing.recommended_price = result["price"]
-                existing.minimum_stay = result["minimum_stay"]
                 existing.explanation = result["explanation"]
                 existing.calculated_at = datetime.now(timezone.utc)
             else:
@@ -214,7 +238,6 @@ def generate_price_recommendations(
                         stay_date=stay_date,
                         actual_price=current.price if current else None,
                         recommended_price=result["price"],
-                        minimum_stay=result["minimum_stay"],
                         explanation=result["explanation"],
                     )
                 )
@@ -224,7 +247,7 @@ def generate_price_recommendations(
 
 
 def configure_shadow_defaults(db: Session) -> list[dict]:
-    """Infer conservative editable policies from current BookingSite prices."""
+    """Infer initial v2 bounds from current BookingSite prices."""
 
     configured = []
     for prop in db.scalars(select(Property).order_by(Property.name)):
@@ -246,21 +269,15 @@ def configure_shadow_defaults(db: Session) -> list[dict]:
             continue
         ordered = sorted(int(price) for price in prices)
         base = ordered[len(ordered) // 2]
-        prop.base_price = round(base / 50_000) * 50_000
         prop.min_price = round(base * 0.70 / 50_000) * 50_000
         prop.max_price = round(base * 1.60 / 50_000) * 50_000
         prop.rounding_increment = 50_000
-        prop.weekday_factors = {str(day): 1.0 for day in range(7)}
-        prop.season_factors = {str(month): 1.0 for month in range(1, 13)}
-        prop.minimum_stay_rules = {"default": 2}
-        prop.orphan_gap_rules = {"max_gap": 3, "price_factor": 0.9, "relax_minimum_stay": True}
         prop.active = True
         configured.append(
             {
                 "property_id": prop.id,
                 "name": prop.name,
                 "configured": True,
-                "base_price": prop.base_price,
                 "min_price": prop.min_price,
                 "max_price": prop.max_price,
             }
@@ -311,7 +328,6 @@ async def publish_recommendations(db: Session) -> int:
                     {
                         "date": row.stay_date.isoformat(),
                         "price": int(row.recommended_price),
-                        "minStay": row.minimum_stay,
                     }
                     for row in batch
                 ]
@@ -319,7 +335,6 @@ async def publish_recommendations(db: Session) -> int:
                 now = datetime.now(timezone.utc)
                 for row in batch:
                     row.published_price = row.recommended_price
-                    row.published_minimum_stay = row.minimum_stay
                     row.published_at = now
                 db.commit()
                 published += len(batch)

@@ -1,165 +1,131 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from statistics import median
 
 
-# Target portfolio occupancy by booking lead time; reserved for the later pace model.
-TARGET_CURVE = ((45, 0.25), (28, 0.45), (14, 0.70), (7, 0.85), (2, 0.95))
-# Converts an OTA competitor price into an estimated direct-booking equivalent.
-DIRECT_CONVERSION = 0.839
+# Defaults are persisted through the pricing settings API and may be tuned without code changes.
+DEFAULT_PRICING_CONFIGURATION = {
+    "competitor_weight": 0.70,
+    "portfolio_weight": 0.30,
+    "neutral_demand_score": 0.50,
+    "demand_adjustment_slope": 0.40,
+    "minimum_demand_adjustment": -0.20,
+    "maximum_demand_adjustment": 0.20,
+    "urgency_adjustments": [
+        {"maximum_days": 3, "adjustment": -0.15},
+        {"maximum_days": 7, "adjustment": -0.10},
+        {"maximum_days": 14, "adjustment": -0.05},
+        {"maximum_days": 30, "adjustment": -0.02},
+    ],
+}
 
 
-def target_occupancy(days_out: int) -> float:
-    """Interpolate target occupancy for the supplied booking lead time."""
+def round_to_pricing_step(value: float, pricing_step: int) -> int:
+    """Round an IDR price to the nearest configured pricing step."""
 
-    points = sorted(TARGET_CURVE)
-    if days_out <= points[0][0]:
-        return points[0][1]
-    if days_out >= points[-1][0]:
-        return points[-1][1]
-    for (left_day, left_value), (right_day, right_value) in zip(points, points[1:]):
-        if left_day <= days_out <= right_day:
-            ratio = (days_out - left_day) / (right_day - left_day)
-            return left_value + ratio * (right_value - left_value)
-    raise AssertionError("unreachable")
+    units = (Decimal(str(value)) / Decimal(pricing_step)).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    return int(units * pricing_step)
 
 
-def round_indonesian_rupiah(value: float, increment: int) -> int:
-    """Round an IDR amount to the nearest configured increment."""
+def calculate_demand_adjustment(demand_score: float, configuration: dict) -> float:
+    """Convert a demand score to a bounded percentage adjustment."""
 
-    units = (Decimal(str(value)) / Decimal(increment)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    return int(units * increment)
-
-
-@dataclass(frozen=True)
-class CompetitorPrice:
-    """Represent one current or recently observed competitor price."""
-
-    price: float
-    available: bool
-    observed_at: datetime
-    last_available_price: float | None = None
-    last_available_at: datetime | None = None
+    adjustment = (
+        demand_score - float(configuration["neutral_demand_score"])
+    ) * float(configuration["demand_adjustment_slope"])
+    return max(
+        float(configuration["minimum_demand_adjustment"]),
+        min(float(configuration["maximum_demand_adjustment"]), adjustment),
+    )
 
 
-def usable_competitor_prices(
-    competitor_prices: list[CompetitorPrice], now: datetime
-) -> list[tuple[float, float]]:
-    """Return fresh competitor prices with lower weights for imputed values."""
+def calculate_urgency_adjustment(days_until_stay: int, configuration: dict) -> float:
+    """Return the configured non-positive adjustment for booking urgency."""
 
-    if not competitor_prices or max(item.observed_at for item in competitor_prices) < now - timedelta(days=10):
-        return []
-    prices = []
-    for comp in competitor_prices:
-        if comp.available:
-            prices.append((comp.price, 1.0))
-        elif (
-            comp.last_available_price is not None
-            and comp.last_available_at is not None
-            and comp.last_available_at >= now - timedelta(days=30)
-        ):
-            prices.append((comp.last_available_price, 0.5))
-    return prices
-
-
-def weighted_median(values: list[tuple[float, float]]) -> float:
-    """Calculate the median of values carrying explicit observation weights."""
-
-    ordered = sorted(values)
-    threshold = sum(weight for _, weight in ordered) / 2
-    running = 0.0
-    for value, weight in ordered:
-        running += weight
-        if running >= threshold:
-            return value
-    return ordered[-1][0]
-
-
-def gap_adjustment(gap_length: int | None, rules: dict) -> tuple[float, int | None]:
-    """Return the price factor and optional stay relaxation for an orphan gap."""
-
-    if not gap_length:
-        return 1.0, None
-    max_gap = int(rules.get("max_gap", 0))
-    if max_gap and gap_length <= max_gap:
-        factor = float(rules.get("price_factor", 1.0))
-        relaxed = gap_length if rules.get("relax_minimum_stay", False) else None
-        return factor, relaxed
-    return 1.0, None
+    days_until_stay = max(0, days_until_stay)
+    tiers = sorted(
+        configuration["urgency_adjustments"],
+        key=lambda tier: int(tier["maximum_days"]),
+    )
+    for tier in tiers:
+        if days_until_stay <= int(tier["maximum_days"]):
+            return float(tier["adjustment"])
+    return 0.0
 
 
 def calculate_price(
     *,
     stay_date: date,
-    today: date,
-    base_price: float,
-    min_price: float,
-    max_price: float,
-    rounding_increment: int,
-    season_factor: float = 1.0,
-    weekday_factor: float = 1.0,
-    portfolio_occupancy: float = 0.0,
-    apply_booking_pace: bool = True,
-    forward_occupancy: float | None = None,
-    competitor_prices: list[CompetitorPrice] | None = None,
-    competitor_availability: float | None = None,
-    gap_length: int | None = None,
-    gap_rules: dict | None = None,
-    default_minimum_stay: int = 1,
-    override_price: float | None = None,
-    override_minimum_stay: int | None = None,
-    now: datetime | None = None,
+    current_date: date,
+    available_competitor_prices: list[float],
+    unavailable_competitor_count: int,
+    all_tracked_competitor_count: int,
+    booked_own_property_count: int,
+    all_own_property_count: int,
+    minimum_price: float,
+    maximum_price: float,
+    pricing_step: int,
+    configuration: dict,
+    manual_override: float | None = None,
 ) -> dict:
-    """Calculate one explainable daily recommendation and minimum stay."""
+    """Calculate one Pricing Engine v2 recommendation from prepared inputs."""
 
-    now = now or datetime.now(timezone.utc)
-    anchor = base_price * season_factor * weekday_factor
-    usable = usable_competitor_prices(competitor_prices or [], now)
-    market_median = weighted_median(usable) if len(usable) >= 3 else None
-    market_benchmark = market_median * DIRECT_CONVERSION if market_median else None
-    blended = 0.6 * market_benchmark + 0.4 * anchor if market_benchmark else anchor
+    if not available_competitor_prices:
+        raise ValueError("at least one available competitor price is required")
+    if all_tracked_competitor_count <= 0:
+        raise ValueError("all_tracked_competitor_count must be positive")
+    if all_own_property_count <= 0:
+        raise ValueError("all_own_property_count must be positive")
 
-    target = target_occupancy(max(0, (stay_date - today).days))
-    pace_adjustment = max(-0.20, min(0.20, portfolio_occupancy - target)) if apply_booking_pace else 0.0
-    forward_occupancy_adjustment = 0.0
-    if forward_occupancy is not None:
-        forward_occupancy_adjustment = max(-0.10, min(0.10, (forward_occupancy - 0.5) * 0.20))
-    availability_adjustment = 0.0
-    if competitor_availability is not None and usable:
-        availability_adjustment = max(-0.05, min(0.05, (0.5 - competitor_availability) * 0.10))
+    market_price = float(median(available_competitor_prices))
+    competitor_unavailability = (
+        unavailable_competitor_count / all_tracked_competitor_count
+    )
+    portfolio_occupancy = booked_own_property_count / all_own_property_count
+    competitor_weight = float(configuration["competitor_weight"])
+    portfolio_weight = float(configuration["portfolio_weight"])
+    demand_score = (
+        competitor_weight * competitor_unavailability
+        + portfolio_weight * portfolio_occupancy
+    )
+    demand_adjustment = calculate_demand_adjustment(demand_score, configuration)
+    days_until_stay = max(0, (stay_date - current_date).days)
+    urgency_adjustment = calculate_urgency_adjustment(
+        days_until_stay, configuration
+    )
+    raw_price = market_price * (1 + demand_adjustment + urgency_adjustment)
+    bounded_price = min(maximum_price, max(minimum_price, raw_price))
+    rounded_price = round_to_pricing_step(bounded_price, pricing_step)
+    final_price = float(manual_override) if manual_override is not None else rounded_price
 
-    gap_factor, relaxed_stay = gap_adjustment(gap_length, gap_rules or {})
-    before_bounds = blended * (
-        1 + pace_adjustment + forward_occupancy_adjustment + availability_adjustment
-    ) * gap_factor
-    bounded = min(max_price, max(min_price, before_bounds))
-    rounded = round_indonesian_rupiah(bounded, rounding_increment)
-    final_price = round_indonesian_rupiah(override_price, rounding_increment) if override_price is not None else rounded
-    minimum_stay = override_minimum_stay or relaxed_stay or default_minimum_stay
     return {
         "price": final_price,
-        "minimum_stay": minimum_stay,
         "explanation": {
-            "internal_anchor": round(anchor, 2),
-            "usable_comp_count": len(usable),
-            "market_median": market_median,
-            "direct_conversion": DIRECT_CONVERSION if market_median else None,
-            "market_benchmark": market_benchmark,
-            "blended_price": round(blended, 2),
-            "target_occupancy": target,
+            "engine_version": "v2",
+            "stay_date": stay_date.isoformat(),
+            "days_until_stay": days_until_stay,
+            "available_competitor_count": len(available_competitor_prices),
+            "unavailable_competitor_count": unavailable_competitor_count,
+            "all_tracked_competitor_count": all_tracked_competitor_count,
+            "competitor_unavailability": competitor_unavailability,
+            "market_price": market_price,
+            "booked_own_property_count": booked_own_property_count,
+            "all_own_property_count": all_own_property_count,
             "portfolio_occupancy": portfolio_occupancy,
-            "booking_pace_adjustment": pace_adjustment,
-            "booking_pace_enabled": apply_booking_pace,
-            "forward_occupancy": forward_occupancy,
-            "forward_occupancy_adjustment": forward_occupancy_adjustment,
-            "competitor_availability_adjustment": availability_adjustment,
-            "orphan_gap_factor": gap_factor,
-            "before_bounds": round(before_bounds, 2),
-            "bounded_price": round(bounded, 2),
-            "rounding_increment": rounding_increment,
-            "hard_override": override_price is not None or override_minimum_stay is not None,
+            "competitor_weight": competitor_weight,
+            "portfolio_weight": portfolio_weight,
+            "demand_score": demand_score,
+            "demand_adjustment": demand_adjustment,
+            "urgency_adjustment": urgency_adjustment,
+            "raw_price": round(raw_price, 2),
+            "bounded_price": round(bounded_price, 2),
+            "rounded_price": rounded_price,
+            "pricing_step": pricing_step,
+            "manual_override": manual_override,
+            "final_price": final_price,
         },
     }

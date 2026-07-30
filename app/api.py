@@ -12,10 +12,10 @@ from app.config import get_settings
 from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_hostex
-from app.jobs import configure_shadow_defaults, generate_price_recommendations, serialized_run
+from app.jobs import configure_shadow_defaults, generate_price_recommendations, pricing_configuration, serialized_run
 from app.models import AdminSession, HostexCalendarDay, HostexListing, Override, Property, Recommendation, Run, Setting
 from app.models import RunKind, RunStatus
-from app.schemas import ModeUpdate, OverrideCreate, PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas import ModeUpdate, OverrideCreate, PricingConfiguration, PropertyCreate, PropertyRead, PropertyUpdate
 
 router = APIRouter(prefix="/api")
 
@@ -81,8 +81,8 @@ def update_property(property_id: int, payload: PropertyUpdate, db: Session = Dep
         raise HTTPException(404, "Property not found")
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
-    if not item.min_price <= item.base_price <= item.max_price:
-        raise HTTPException(422, "price bounds must satisfy min <= base <= max")
+    if item.min_price > item.max_price:
+        raise HTTPException(422, "price bounds must satisfy min <= max")
     db.commit()
     db.refresh(item)
     return item
@@ -116,8 +116,6 @@ def recommendation_calendar(
             "actual_price": item.actual_price,
             "recommended_price": item.recommended_price,
             "published_price": item.published_price,
-            "minimum_stay": item.minimum_stay,
-            "published_minimum_stay": item.published_minimum_stay,
             "explanation": item.explanation,
             "difference": float(item.recommended_price) - float(item.actual_price) if item.actual_price else None,
             "difference_percentage": (
@@ -155,7 +153,7 @@ def run_shadow_pricing(db: Session = Depends(get_database_session)):
 
 @router.post("/overrides", dependencies=[Depends(require_csrf)])
 def create_override(payload: OverrideCreate, db: Session = Depends(get_database_session)):
-    """Create a hard price or minimum-stay date-range override."""
+    """Create a hard price date-range override."""
 
     if not db.get(Property, payload.property_id):
         raise HTTPException(404, "Property not found")
@@ -180,7 +178,6 @@ def list_overrides(property_id: int | None = None, db: Session = Depends(get_dat
             "start_date": item.start_date,
             "end_date": item.end_date,
             "price": item.price,
-            "minimum_stay": item.minimum_stay,
             "reason": item.reason,
             "created_at": item.created_at,
         }
@@ -351,5 +348,28 @@ def set_mode(payload: ModeUpdate, db: Session = Depends(get_database_session)):
         item.value = value
     else:
         db.add(Setting(key="mode", value=value))
+    db.commit()
+    return value
+
+
+@router.get("/settings/pricing", dependencies=[Depends(require_session)])
+def get_pricing_configuration(db: Session = Depends(get_database_session)):
+    """Return the effective Pricing Engine v2 configuration."""
+
+    return pricing_configuration(db)
+
+
+@router.put("/settings/pricing", dependencies=[Depends(require_csrf)])
+def set_pricing_configuration(
+    payload: PricingConfiguration, db: Session = Depends(get_database_session)
+):
+    """Persist validated Pricing Engine v2 coefficients."""
+
+    value = payload.model_dump()
+    item = db.get(Setting, "pricing_engine_v2")
+    if item:
+        item.value = value
+    else:
+        db.add(Setting(key="pricing_engine_v2", value=value))
     db.commit()
     return value

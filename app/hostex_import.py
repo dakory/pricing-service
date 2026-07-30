@@ -91,14 +91,9 @@ def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
                     hostex_property_id=external_id,
                     hostex_listing_id=f"unmapped:{external_id}",
                     active=False,
-                    base_price=1_000_000,
                     min_price=500_000,
                     max_price=2_000_000,
                     rounding_increment=50_000,
-                    season_factors={},
-                    weekday_factors={},
-                    minimum_stay_rules={},
-                    orphan_gap_rules={},
                     competitor_urls=[],
                 )
             )
