@@ -18,8 +18,8 @@ def test_market_demand_and_urgency_formula():
         available_competitor_prices=[1_000_000, 1_500_000, 2_000_000],
         unavailable_competitor_count=3,
         all_tracked_competitor_count=4,
-        booked_own_property_count=2,
-        all_own_property_count=3,
+        booked_pricing_group_property_count=2,
+        all_pricing_group_property_count=3,
         minimum_price=500_000,
         maximum_price=3_000_000,
         pricing_step=50_000,
@@ -29,7 +29,7 @@ def test_market_demand_and_urgency_formula():
     explanation = result["explanation"]
     assert explanation["market_price"] == 1_500_000
     assert explanation["competitor_unavailability"] == pytest.approx(0.75)
-    assert explanation["portfolio_occupancy"] == pytest.approx(2 / 3)
+    assert explanation["pricing_group_occupancy"] == pytest.approx(2 / 3)
     assert explanation["demand_score"] == pytest.approx(0.725)
     assert explanation["demand_adjustment"] == pytest.approx(0.09)
     assert explanation["urgency_adjustment"] == -0.10
@@ -62,8 +62,8 @@ def test_bounds_rounding_and_override_order():
         available_competitor_prices=[3_000_000],
         unavailable_competitor_count=0,
         all_tracked_competitor_count=1,
-        booked_own_property_count=0,
-        all_own_property_count=1,
+        booked_pricing_group_property_count=0,
+        all_pricing_group_property_count=1,
         minimum_price=900_000,
         maximum_price=1_100_000,
         pricing_step=50_000,
@@ -75,8 +75,8 @@ def test_bounds_rounding_and_override_order():
         available_competitor_prices=[1_000_000],
         unavailable_competitor_count=0,
         all_tracked_competitor_count=1,
-        booked_own_property_count=0,
-        all_own_property_count=1,
+        booked_pricing_group_property_count=0,
+        all_pricing_group_property_count=1,
         minimum_price=900_000,
         maximum_price=1_100_000,
         pricing_step=50_000,
@@ -98,10 +98,64 @@ def test_available_competitor_price_is_required():
             available_competitor_prices=[],
             unavailable_competitor_count=1,
             all_tracked_competitor_count=1,
-            booked_own_property_count=0,
-            all_own_property_count=1,
+            booked_pricing_group_property_count=0,
+            all_pricing_group_property_count=1,
             minimum_price=1,
             maximum_price=2,
             pricing_step=1,
             configuration=DEFAULT_PRICING_CONFIGURATION,
         )
+
+
+def test_market_offset_changes_the_median_base_price():
+    configuration = {
+        **DEFAULT_PRICING_CONFIGURATION,
+        "market_price_adjustment": -0.10,
+        "demand_adjustment_enabled": False,
+        "urgency_adjustment_enabled": False,
+    }
+    result = calculate_price(
+        stay_date=date(2026, 9, 1),
+        current_date=date(2026, 7, 30),
+        available_competitor_prices=[1_000_000, 1_500_000, 2_000_000],
+        unavailable_competitor_count=0,
+        all_tracked_competitor_count=3,
+        booked_pricing_group_property_count=0,
+        all_pricing_group_property_count=1,
+        minimum_price=500_000,
+        maximum_price=2_000_000,
+        pricing_step=10_000,
+        configuration=configuration,
+    )
+
+    assert result["explanation"]["base_price"] == 1_350_000
+    assert result["explanation"]["demand_adjustment"] == 0
+    assert result["explanation"]["urgency_adjustment"] == 0
+    assert result["price"] == 1_350_000
+
+
+def test_manual_base_price_does_not_require_competitor_prices():
+    configuration = {
+        **DEFAULT_PRICING_CONFIGURATION,
+        "base_price_mode": "manual",
+        "manual_base_price": 1_234_000,
+        "demand_adjustment_enabled": False,
+        "urgency_adjustment_enabled": False,
+    }
+    result = calculate_price(
+        stay_date=date(2026, 9, 1),
+        current_date=date(2026, 7, 30),
+        available_competitor_prices=[],
+        unavailable_competitor_count=0,
+        all_tracked_competitor_count=0,
+        booked_pricing_group_property_count=0,
+        all_pricing_group_property_count=1,
+        minimum_price=500_000,
+        maximum_price=2_000_000,
+        pricing_step=1_000,
+        configuration=configuration,
+    )
+
+    assert result["explanation"]["market_price"] is None
+    assert result["explanation"]["base_price"] == 1_234_000
+    assert result["price"] == 1_234_000

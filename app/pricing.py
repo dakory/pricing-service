@@ -7,8 +7,13 @@ from statistics import median
 
 # Defaults are persisted through the pricing settings API and may be tuned without code changes.
 DEFAULT_PRICING_CONFIGURATION = {
+    "base_price_mode": "market_median",
+    "manual_base_price": None,
+    "market_price_adjustment": 0.0,
+    "demand_adjustment_enabled": True,
+    "urgency_adjustment_enabled": True,
     "competitor_weight": 0.70,
-    "portfolio_weight": 0.30,
+    "pricing_group_weight": 0.30,
     "neutral_demand_score": 0.50,
     "demand_adjustment_slope": 0.40,
     "minimum_demand_adjustment": -0.20,
@@ -20,6 +25,29 @@ DEFAULT_PRICING_CONFIGURATION = {
         {"maximum_days": 30, "adjustment": -0.02},
     ],
 }
+
+
+def merge_pricing_configuration(
+    parent: dict, overrides: dict | None = None
+) -> dict:
+    """Merge pricing overrides while inheriting untouched urgency tiers."""
+
+    overrides = {
+        key: value
+        for key, value in (overrides or {}).items()
+        if value is not None
+    }
+    merged = {**parent, **overrides}
+    parent_tiers = {
+        int(tier["maximum_days"]): dict(tier)
+        for tier in parent.get("urgency_adjustments", [])
+    }
+    for tier in overrides.get("urgency_adjustments", []):
+        parent_tiers[int(tier["maximum_days"])] = dict(tier)
+    merged["urgency_adjustments"] = [
+        parent_tiers[maximum_days] for maximum_days in sorted(parent_tiers)
+    ]
+    return merged
 
 
 def round_to_pricing_step(value: float, pricing_step: int) -> int:
@@ -64,8 +92,8 @@ def calculate_price(
     available_competitor_prices: list[float],
     unavailable_competitor_count: int,
     all_tracked_competitor_count: int,
-    booked_own_property_count: int,
-    all_own_property_count: int,
+    booked_pricing_group_property_count: int,
+    all_pricing_group_property_count: int,
     minimum_price: float,
     maximum_price: float,
     pricing_step: int,
@@ -74,30 +102,63 @@ def calculate_price(
 ) -> dict:
     """Calculate one Pricing Engine v2 recommendation from prepared inputs."""
 
-    if not available_competitor_prices:
-        raise ValueError("at least one available competitor price is required")
-    if all_tracked_competitor_count <= 0:
-        raise ValueError("all_tracked_competitor_count must be positive")
-    if all_own_property_count <= 0:
-        raise ValueError("all_own_property_count must be positive")
+    if all_pricing_group_property_count <= 0:
+        raise ValueError("all_pricing_group_property_count must be positive")
 
-    market_price = float(median(available_competitor_prices))
+    base_price_mode = configuration["base_price_mode"]
+    market_price = (
+        float(median(available_competitor_prices))
+        if available_competitor_prices
+        else None
+    )
+    market_price_adjustment = float(configuration["market_price_adjustment"])
+    if base_price_mode == "market_median":
+        if market_price is None:
+            raise ValueError(
+                "at least one available competitor price is required for market_median mode"
+            )
+        base_price = market_price * (1 + market_price_adjustment)
+    elif base_price_mode == "manual":
+        manual_base_price = configuration.get("manual_base_price")
+        if manual_base_price is None:
+            raise ValueError("manual_base_price is required for manual mode")
+        base_price = float(manual_base_price)
+    else:
+        raise ValueError(f"unsupported base_price_mode: {base_price_mode}")
+
     competitor_unavailability = (
         unavailable_competitor_count / all_tracked_competitor_count
+        if all_tracked_competitor_count
+        else 0.0
     )
-    portfolio_occupancy = booked_own_property_count / all_own_property_count
+    pricing_group_occupancy = (
+        booked_pricing_group_property_count
+        / all_pricing_group_property_count
+    )
     competitor_weight = float(configuration["competitor_weight"])
-    portfolio_weight = float(configuration["portfolio_weight"])
+    pricing_group_weight = float(configuration["pricing_group_weight"])
     demand_score = (
         competitor_weight * competitor_unavailability
-        + portfolio_weight * portfolio_occupancy
+        + pricing_group_weight * pricing_group_occupancy
     )
-    demand_adjustment = calculate_demand_adjustment(demand_score, configuration)
+    demand_adjustment_enabled = bool(
+        configuration["demand_adjustment_enabled"]
+    )
+    demand_adjustment = (
+        calculate_demand_adjustment(demand_score, configuration)
+        if demand_adjustment_enabled
+        else 0.0
+    )
     days_until_stay = max(0, (stay_date - current_date).days)
-    urgency_adjustment = calculate_urgency_adjustment(
-        days_until_stay, configuration
+    urgency_adjustment_enabled = bool(
+        configuration["urgency_adjustment_enabled"]
     )
-    raw_price = market_price * (1 + demand_adjustment + urgency_adjustment)
+    urgency_adjustment = (
+        calculate_urgency_adjustment(days_until_stay, configuration)
+        if urgency_adjustment_enabled
+        else 0.0
+    )
+    raw_price = base_price * (1 + demand_adjustment + urgency_adjustment)
     bounded_price = min(maximum_price, max(minimum_price, raw_price))
     rounded_price = round_to_pricing_step(bounded_price, pricing_step)
     final_price = float(manual_override) if manual_override is not None else rounded_price
@@ -113,13 +174,19 @@ def calculate_price(
             "all_tracked_competitor_count": all_tracked_competitor_count,
             "competitor_unavailability": competitor_unavailability,
             "market_price": market_price,
-            "booked_own_property_count": booked_own_property_count,
-            "all_own_property_count": all_own_property_count,
-            "portfolio_occupancy": portfolio_occupancy,
+            "base_price_mode": base_price_mode,
+            "market_price_adjustment": market_price_adjustment,
+            "manual_base_price": configuration.get("manual_base_price"),
+            "base_price": round(base_price, 2),
+            "booked_pricing_group_property_count": booked_pricing_group_property_count,
+            "all_pricing_group_property_count": all_pricing_group_property_count,
+            "pricing_group_occupancy": pricing_group_occupancy,
             "competitor_weight": competitor_weight,
-            "portfolio_weight": portfolio_weight,
+            "pricing_group_weight": pricing_group_weight,
             "demand_score": demand_score,
+            "demand_adjustment_enabled": demand_adjustment_enabled,
             "demand_adjustment": demand_adjustment,
+            "urgency_adjustment_enabled": urgency_adjustment_enabled,
             "urgency_adjustment": urgency_adjustment,
             "raw_price": round(raw_price, 2),
             "bounded_price": round(bounded_price, 2),

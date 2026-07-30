@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.hostex import HostexClient, HostexError
-from app.models import HostexCalendarDay, HostexListing, Property, Reservation
+from app.models import HostexCalendarDay, HostexListing, PricingGroup, Property, Reservation
 
 
 def first_present_value(item: dict, *keys: str, default=None):
@@ -73,6 +73,17 @@ def external_property_id(item: dict) -> int | None:
 def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
     """Create or refresh local property mappings from Hostex records."""
 
+    default_group = db.scalar(
+        select(PricingGroup).order_by(PricingGroup.id).limit(1)
+    )
+    if not default_group:
+        default_group = PricingGroup(
+            name="Default pricing group",
+            pricing_settings={},
+            competitor_urls=[],
+        )
+        db.add(default_group)
+        db.flush()
     created = updated = 0
     for record in records:
         external_id = parse_integer(first_present_value(record, "id", "property_id"))
@@ -88,13 +99,14 @@ def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
             db.add(
                 Property(
                     name=name,
+                    pricing_group_id=default_group.id,
                     hostex_property_id=external_id,
                     hostex_listing_id=f"unmapped:{external_id}",
                     active=False,
                     min_price=500_000,
                     max_price=2_000_000,
                     rounding_increment=50_000,
-                    competitor_urls=[],
+                    pricing_settings={},
                 )
             )
             created += 1

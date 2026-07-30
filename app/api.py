@@ -12,10 +12,11 @@ from app.config import get_settings
 from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_hostex
-from app.jobs import configure_shadow_defaults, generate_price_recommendations, pricing_configuration, serialized_run
-from app.models import AdminSession, HostexCalendarDay, HostexListing, Override, Property, Recommendation, Run, Setting
+from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
+from app.models import AdminSession, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Run, Setting
 from app.models import RunKind, RunStatus
-from app.schemas import ModeUpdate, OverrideCreate, PricingConfiguration, PropertyCreate, PropertyRead, PropertyUpdate
+from app.pricing import merge_pricing_configuration
+from app.schemas import ModeUpdate, OverrideCreate, PricingConfiguration, PricingConfigurationOverride, PricingGroupCreate, PricingGroupUpdate, PropertyCreate, PropertyRead, PropertyUpdate
 
 router = APIRouter(prefix="/api")
 
@@ -61,11 +62,91 @@ def list_properties(db: Session = Depends(get_database_session)):
     return db.scalars(select(Property).order_by(Property.name)).all()
 
 
+@router.get("/pricing-groups", dependencies=[Depends(require_session)])
+def list_pricing_groups(db: Session = Depends(get_database_session)):
+    """List pricing groups with competitor and inheritance configuration."""
+
+    groups = db.scalars(select(PricingGroup).order_by(PricingGroup.name)).all()
+    return [
+        {
+            "id": group.id,
+            "name": group.name,
+            "pricing_settings": group.pricing_settings,
+            "competitor_urls": group.competitor_urls,
+            "property_count": len(group.properties),
+        }
+        for group in groups
+    ]
+
+
+@router.post("/pricing-groups", dependencies=[Depends(require_csrf)])
+def create_pricing_group(
+    payload: PricingGroupCreate, db: Session = Depends(get_database_session)
+):
+    """Create a pricing group with validated configuration overrides."""
+
+    overrides = PricingConfigurationOverride.model_validate(
+        payload.pricing_settings
+    ).model_dump(exclude_none=True, mode="json")
+    PricingConfiguration.model_validate(
+        merge_pricing_configuration(pricing_configuration(db), overrides)
+    )
+    item = PricingGroup(
+        name=payload.name,
+        pricing_settings=overrides,
+        competitor_urls=list(dict.fromkeys(payload.competitor_urls)),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id}
+
+
+@router.patch("/pricing-groups/{pricing_group_id}", dependencies=[Depends(require_csrf)])
+def update_pricing_group(
+    pricing_group_id: int,
+    payload: PricingGroupUpdate,
+    db: Session = Depends(get_database_session),
+):
+    """Update one pricing group's competitors or inherited settings."""
+
+    item = db.get(PricingGroup, pricing_group_id)
+    if not item:
+        raise HTTPException(404, "Pricing group not found")
+    values = payload.model_dump(exclude_unset=True)
+    if "pricing_settings" in values:
+        overrides = PricingConfigurationOverride.model_validate(
+            values["pricing_settings"] or {}
+        ).model_dump(exclude_none=True, mode="json")
+        PricingConfiguration.model_validate(
+            merge_pricing_configuration(pricing_configuration(db), overrides)
+        )
+        values["pricing_settings"] = overrides
+    if "competitor_urls" in values:
+        values["competitor_urls"] = list(
+            dict.fromkeys(values["competitor_urls"] or [])
+        )
+    for key, value in values.items():
+        setattr(item, key, value)
+    db.commit()
+    return {"id": item.id}
+
+
 @router.post("/properties", response_model=PropertyRead, dependencies=[Depends(require_csrf)])
 def create_property(payload: PropertyCreate, db: Session = Depends(get_database_session)):
     """Create a managed property pricing policy."""
 
-    item = Property(**payload.model_dump())
+    values = payload.model_dump()
+    if not db.get(PricingGroup, values["pricing_group_id"]):
+        raise HTTPException(404, "Pricing group not found")
+    overrides = PricingConfigurationOverride.model_validate(
+        values.get("pricing_settings", {})
+    ).model_dump(exclude_none=True, mode="json")
+    PricingConfiguration.model_validate(
+        merge_pricing_configuration(pricing_configuration(db), overrides)
+    )
+    values["pricing_settings"] = overrides
+    item = Property(**values)
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -79,7 +160,20 @@ def update_property(property_id: int, payload: PropertyUpdate, db: Session = Dep
     item = db.get(Property, property_id)
     if not item:
         raise HTTPException(404, "Property not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    values = payload.model_dump(exclude_unset=True)
+    if "pricing_group_id" in values and not db.get(
+        PricingGroup, values["pricing_group_id"]
+    ):
+        raise HTTPException(404, "Pricing group not found")
+    if "pricing_settings" in values:
+        overrides = PricingConfigurationOverride.model_validate(
+            values["pricing_settings"] or {}
+        ).model_dump(exclude_none=True, mode="json")
+        PricingConfiguration.model_validate(
+            merge_pricing_configuration(pricing_configuration(db), overrides)
+        )
+        values["pricing_settings"] = overrides
+    for key, value in values.items():
         setattr(item, key, value)
     if item.min_price > item.max_price:
         raise HTTPException(422, "price bounds must satisfy min <= max")
@@ -127,13 +221,6 @@ def recommendation_calendar(
         }
         for item, name in rows
     ]
-
-
-@router.post("/pricing/bootstrap", dependencies=[Depends(require_csrf)])
-def bootstrap_pricing(db: Session = Depends(get_database_session)):
-    """Infer conservative shadow policies from imported BookingSite prices."""
-
-    return {"mode": "shadow", "properties": configure_shadow_defaults(db)}
 
 
 @router.post("/pricing/run", dependencies=[Depends(require_csrf)])
@@ -365,7 +452,7 @@ def set_pricing_configuration(
 ):
     """Persist validated Pricing Engine v2 coefficients."""
 
-    value = payload.model_dump()
+    value = payload.model_dump(mode="json")
     item = db.get(Setting, "pricing_engine_v2")
     if item:
         item.value = value

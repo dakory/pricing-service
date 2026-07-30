@@ -30,12 +30,29 @@ class RunStatus(str, enum.Enum):
     skipped = "skipped"
 
 
+class PricingGroup(Base):
+    """Group comparable properties, competitors, and pricing defaults."""
+
+    __tablename__ = "pricing_groups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True)
+    pricing_settings: Mapped[dict] = mapped_column(JSON, default=dict)
+    competitor_urls: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+    properties: Mapped[list["Property"]] = relationship(back_populates="pricing_group")
+
+
 class Property(Base):
     """Store one managed property and its Pricing Engine v2 bounds."""
 
     __tablename__ = "properties"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    pricing_group_id: Mapped[int] = mapped_column(ForeignKey("pricing_groups.id"))
     name: Mapped[str] = mapped_column(String(200))
     hostex_property_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
     hostex_listing_id: Mapped[str] = mapped_column(String(100), unique=True)
@@ -44,12 +61,13 @@ class Property(Base):
     min_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     max_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     rounding_increment: Mapped[int] = mapped_column(Integer, default=50_000)
+    pricing_settings: Mapped[dict] = mapped_column(JSON, default=dict)
     weekly_discount: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     monthly_discount: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
-    competitor_urls: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     recommendations: Mapped[list["Recommendation"]] = relationship(back_populates="property")
+    pricing_group: Mapped[PricingGroup] = relationship(back_populates="properties")
 
 
 class HostexListing(Base):
@@ -110,7 +128,7 @@ class CompetitorObservation(Base):
     __table_args__ = (UniqueConstraint("url", "stay_date", "scraped_at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id"))
+    pricing_group_id: Mapped[int] = mapped_column(ForeignKey("pricing_groups.id"))
     url: Mapped[str] = mapped_column(Text)
     stay_date: Mapped[date] = mapped_column(Date)
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))

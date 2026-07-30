@@ -11,15 +11,16 @@ class PropertyBase(BaseModel):
     """Define shared property pricing-policy fields."""
 
     name: str
+    pricing_group_id: int
     hostex_listing_id: str
     booking_site_listing_id: str | None = None
     active: bool = True
     min_price: Decimal = Field(gt=0)
     max_price: Decimal = Field(gt=0)
     rounding_increment: int = Field(default=50_000, gt=0)
+    pricing_settings: dict = Field(default_factory=dict)
     weekly_discount: Decimal | None = None
     monthly_discount: Decimal | None = None
-    competitor_urls: list[str] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def valid_bounds(self):
@@ -41,12 +42,13 @@ class PropertyUpdate(BaseModel):
 
     name: str | None = None
     active: bool | None = None
+    pricing_group_id: int | None = None
     min_price: Decimal | None = Field(default=None, gt=0)
     max_price: Decimal | None = Field(default=None, gt=0)
     rounding_increment: int | None = Field(default=None, gt=0)
+    pricing_settings: dict | None = None
     weekly_discount: Decimal | None = None
     monthly_discount: Decimal | None = None
-    competitor_urls: list[str] | None = Field(default=None, max_length=30)
 
 
 class PropertyRead(PropertyBase):
@@ -54,6 +56,22 @@ class PropertyRead(PropertyBase):
 
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+
+class PricingGroupCreate(BaseModel):
+    """Validate creation of a pricing group."""
+
+    name: str = Field(min_length=1, max_length=200)
+    pricing_settings: dict = Field(default_factory=dict)
+    competitor_urls: list[str] = Field(default_factory=list, max_length=30)
+
+
+class PricingGroupUpdate(BaseModel):
+    """Validate a partial pricing-group update."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    pricing_settings: dict | None = None
+    competitor_urls: list[str] | None = Field(default=None, max_length=30)
 
 
 class OverrideCreate(BaseModel):
@@ -79,8 +97,13 @@ class OverrideCreate(BaseModel):
 class PricingConfiguration(BaseModel):
     """Validate global Pricing Engine v2 coefficients."""
 
+    base_price_mode: Literal["market_median", "manual"]
+    manual_base_price: Decimal | None = Field(default=None, gt=0)
+    market_price_adjustment: float = Field(gt=-1)
+    demand_adjustment_enabled: bool
+    urgency_adjustment_enabled: bool
     competitor_weight: float = Field(ge=0, le=1)
-    portfolio_weight: float = Field(ge=0, le=1)
+    pricing_group_weight: float = Field(ge=0, le=1)
     neutral_demand_score: float = Field(ge=0, le=1)
     demand_adjustment_slope: float = Field(ge=0)
     minimum_demand_adjustment: float = Field(ge=-1, le=0)
@@ -91,8 +114,10 @@ class PricingConfiguration(BaseModel):
     def valid_configuration(self):
         """Require normalized weights and valid non-positive urgency tiers."""
 
-        if abs(self.competitor_weight + self.portfolio_weight - 1.0) > 1e-9:
-            raise ValueError("competitor_weight + portfolio_weight must equal 1.0")
+        if abs(self.competitor_weight + self.pricing_group_weight - 1.0) > 1e-9:
+            raise ValueError("competitor_weight + pricing_group_weight must equal 1.0")
+        if self.base_price_mode == "manual" and self.manual_base_price is None:
+            raise ValueError("manual_base_price is required in manual mode")
         maximum_days = []
         for tier in self.urgency_adjustments:
             if "maximum_days" not in tier or "adjustment" not in tier:
@@ -103,6 +128,25 @@ class PricingConfiguration(BaseModel):
         if len(maximum_days) != len(set(maximum_days)):
             raise ValueError("urgency tier maximum_days values must be unique")
         return self
+
+
+class PricingConfigurationOverride(BaseModel):
+    """Validate optional property-level overrides of global pricing settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    base_price_mode: Literal["market_median", "manual"] | None = None
+    manual_base_price: Decimal | None = Field(default=None, gt=0)
+    market_price_adjustment: float | None = Field(default=None, gt=-1)
+    demand_adjustment_enabled: bool | None = None
+    urgency_adjustment_enabled: bool | None = None
+    competitor_weight: float | None = Field(default=None, ge=0, le=1)
+    pricing_group_weight: float | None = Field(default=None, ge=0, le=1)
+    neutral_demand_score: float | None = Field(default=None, ge=0, le=1)
+    demand_adjustment_slope: float | None = Field(default=None, ge=0)
+    minimum_demand_adjustment: float | None = Field(default=None, ge=-1, le=0)
+    maximum_demand_adjustment: float | None = Field(default=None, ge=0, le=1)
+    urgency_adjustments: list[dict] | None = None
 
 
 class ModeUpdate(BaseModel):

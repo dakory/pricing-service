@@ -11,8 +11,8 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import CompetitorObservation, HostexCalendarDay, HostexListing, Override, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
-from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price
+from app.models import CompetitorObservation, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, merge_pricing_configuration
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
 JOB_LOCK = 7_324_502
@@ -106,25 +106,39 @@ def property_availability(db: Session, prop: Property, start: date, days: int) -
     return by_date, unavailable, latest
 
 
-def pricing_configuration(db: Session) -> dict:
-    """Return persisted Pricing Engine v2 configuration or safe defaults."""
+def pricing_configuration(
+    db: Session,
+    prop: Property | None = None,
+    pricing_group: PricingGroup | None = None,
+) -> dict:
+    """Merge system, pricing-group, and property configuration levels."""
 
     setting = db.get(Setting, "pricing_engine_v2")
-    return {**DEFAULT_PRICING_CONFIGURATION, **(setting.value if setting else {})}
+    global_configuration = merge_pricing_configuration(
+        DEFAULT_PRICING_CONFIGURATION,
+        setting.value if setting else {},
+    )
+    group = pricing_group or (prop.pricing_group if prop else None)
+    group_configuration = merge_pricing_configuration(
+        global_configuration, group.pricing_settings if group else {}
+    )
+    return merge_pricing_configuration(
+        group_configuration, prop.pricing_settings if prop else {}
+    )
 
 
 def latest_competitor_observations(
-    db: Session, prop: Property, start: date, horizon_end: date
+    db: Session, pricing_group: PricingGroup, start: date, horizon_end: date
 ) -> dict[date, dict[str, CompetitorObservation]]:
     """Group the latest prepared observation by stay date and competitor URL."""
 
-    if not prop.competitor_urls:
+    if not pricing_group.competitor_urls:
         return {}
     observations = db.scalars(
         select(CompetitorObservation)
         .where(
-            CompetitorObservation.property_id == prop.id,
-            CompetitorObservation.url.in_(prop.competitor_urls),
+            CompetitorObservation.pricing_group_id == pricing_group.id,
+            CompetitorObservation.url.in_(pricing_group.competitor_urls),
             CompetitorObservation.stay_date >= start,
             CompetitorObservation.stay_date < horizon_end,
         )
@@ -151,7 +165,9 @@ def generate_price_recommendations(
         prop.id: property_availability(db, prop, today, horizon_days)
         for prop in properties
     }
-    configuration = pricing_configuration(db)
+    properties_by_group: dict[int, list[Property]] = {}
+    for prop in properties:
+        properties_by_group.setdefault(prop.pricing_group_id, []).append(prop)
     db.execute(
         delete(Recommendation).where(
             Recommendation.stay_date >= today,
@@ -160,10 +176,12 @@ def generate_price_recommendations(
     )
     count = 0
     for prop in properties:
+        configuration = pricing_configuration(db, prop)
         calendar, unavailable, imported_at = availability[prop.id]
         observations = latest_competitor_observations(
-            db, prop, today, horizon_end
+            db, prop.pricing_group, today, horizon_end
         )
+        group_properties = properties_by_group[prop.pricing_group_id]
         stale = imported_at is None or imported_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(hours=36)
         for offset in range(horizon_days):
             stay_date = today + timedelta(days=offset)
@@ -175,13 +193,16 @@ def generate_price_recommendations(
                 for observation in by_url.values()
                 if observation.available and observation.price is not None
             ]
-            if not available_prices:
+            if (
+                configuration["base_price_mode"] == "market_median"
+                and not available_prices
+            ):
                 continue
             override = active_override(db, prop.id, stay_date)
             current = calendar.get(stay_date)
             booked_property_count = sum(
-                stay_date in property_availability_data[1]
-                for property_availability_data in availability.values()
+                stay_date in availability[group_property.id][1]
+                for group_property in group_properties
             )
             result = calculate_price(
                 stay_date=stay_date,
@@ -190,9 +211,11 @@ def generate_price_recommendations(
                 unavailable_competitor_count=sum(
                     not observation.available for observation in by_url.values()
                 ),
-                all_tracked_competitor_count=len(prop.competitor_urls),
-                booked_own_property_count=booked_property_count,
-                all_own_property_count=len(properties),
+                all_tracked_competitor_count=len(
+                    prop.pricing_group.competitor_urls
+                ),
+                booked_pricing_group_property_count=booked_property_count,
+                all_pricing_group_property_count=len(group_properties),
                 minimum_price=float(prop.min_price),
                 maximum_price=float(prop.max_price),
                 pricing_step=prop.rounding_increment,
@@ -244,52 +267,6 @@ def generate_price_recommendations(
             count += 1
         db.commit()
     return count
-
-
-def configure_shadow_defaults(db: Session) -> list[dict]:
-    """Infer initial v2 bounds from current BookingSite prices."""
-
-    configured = []
-    for prop in db.scalars(select(Property).order_by(Property.name)):
-        prices = db.scalars(
-            select(HostexCalendarDay.price)
-            .join(
-                HostexListing,
-                (HostexCalendarDay.listing_id == HostexListing.listing_id)
-                & (HostexCalendarDay.channel_type == HostexListing.channel_type),
-            )
-            .where(
-                HostexListing.property_id == prop.id,
-                HostexListing.channel_type == "booking_site",
-                HostexCalendarDay.price.is_not(None),
-            )
-        ).all()
-        if not prices:
-            configured.append({"property_id": prop.id, "name": prop.name, "configured": False})
-            continue
-        ordered = sorted(int(price) for price in prices)
-        base = ordered[len(ordered) // 2]
-        prop.min_price = round(base * 0.70 / 50_000) * 50_000
-        prop.max_price = round(base * 1.60 / 50_000) * 50_000
-        prop.rounding_increment = 50_000
-        prop.active = True
-        configured.append(
-            {
-                "property_id": prop.id,
-                "name": prop.name,
-                "configured": True,
-                "min_price": prop.min_price,
-                "max_price": prop.max_price,
-            }
-        )
-    mode = db.get(Setting, "mode")
-    value = {"mode": "shadow", "activation_date": None}
-    if mode:
-        mode.value = value
-    else:
-        db.add(Setting(key="mode", value=value))
-    db.commit()
-    return configured
 
 
 def publishing_enabled(db: Session, today: date) -> bool:
