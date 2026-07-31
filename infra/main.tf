@@ -156,6 +156,19 @@ resource "aws_ssm_parameter" "app_secrets" {
   }
 }
 
+resource "aws_ssm_parameter" "competitor_callback_token" {
+  name        = "/${var.app_name}/competitor-callback-token"
+  description = "Bearer token shared by the competitor Lambda and backend"
+  type        = "SecureString"
+  tier        = "Standard"
+  key_id      = aws_kms_key.backups.arn
+  value       = "REPLACE_ME"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 resource "aws_iam_role_policy" "application_data" {
   name = "${var.app_name}-application-data"
   role = aws_iam_role.ec2_role.id
@@ -165,7 +178,7 @@ resource "aws_iam_role_policy" "application_data" {
       {
         Effect   = "Allow"
         Action   = ["ssm:GetParameter"]
-        Resource = [aws_ssm_parameter.hostex_token.arn, aws_ssm_parameter.app_secrets.arn]
+        Resource = [aws_ssm_parameter.hostex_token.arn, aws_ssm_parameter.app_secrets.arn, aws_ssm_parameter.competitor_callback_token.arn]
       },
       {
         Effect   = "Allow"
@@ -213,6 +226,125 @@ resource "aws_ecr_repository" "app" {
   tags = {
     Name = var.app_name
   }
+}
+
+resource "aws_ecr_repository" "competitor_lambda" {
+  name                 = "${var.app_name}-competitor-lambda"
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Name = "${var.app_name}-competitor-lambda"
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "competitor_lambda" {
+  repository = aws_ecr_repository.competitor_lambda.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep the three newest Lambda images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 3
+      }
+      action = {
+        type = "expire"
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role" "competitor_lambda" {
+  name = "${var.app_name}-competitor-lambda-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "competitor_lambda" {
+  name              = "/aws/lambda/${var.app_name}-competitor-collector"
+  retention_in_days = 7
+}
+
+resource "aws_iam_role_policy" "competitor_lambda" {
+  name = "${var.app_name}-competitor-lambda-policy"
+  role = aws_iam_role.competitor_lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.competitor_lambda.arn}:*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = aws_ssm_parameter.competitor_callback_token.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = aws_kms_key.backups.arn
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "competitor_collector" {
+  count = var.competitor_lambda_image_uri == "" ? 0 : 1
+
+  function_name = "${var.app_name}-competitor-collector"
+  role          = aws_iam_role.competitor_lambda.arn
+  package_type  = "Image"
+  image_uri     = var.competitor_lambda_image_uri
+  architectures = ["x86_64"]
+  memory_size   = 256
+  timeout       = var.competitor_lambda_timeout
+
+  reserved_concurrent_executions = 1
+
+  environment {
+    variables = {
+      BACKEND_CALLBACK_URL             = var.competitor_callback_url != "" ? var.competitor_callback_url : "https://${var.domain}/api/internal/competitor-observations"
+      BACKEND_CALLBACK_TOKEN_PARAMETER = aws_ssm_parameter.competitor_callback_token.name
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.competitor_lambda,
+    aws_iam_role_policy.competitor_lambda,
+  ]
+}
+
+resource "aws_iam_role_policy" "invoke_competitor_lambda" {
+  count = var.competitor_lambda_image_uri == "" ? 0 : 1
+
+  name = "${var.app_name}-invoke-competitor-lambda"
+  role = aws_iam_role.ec2_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = aws_lambda_function.competitor_collector[0].arn
+    }]
+  })
 }
 
 resource "aws_instance" "app" {

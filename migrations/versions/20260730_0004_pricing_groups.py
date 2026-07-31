@@ -83,7 +83,10 @@ def upgrade() -> None:
         column["name"]
         for column in inspect(bind).get_columns("competitor_observations")
     }
-    if "pricing_group_id" not in observation_columns:
+    if (
+        "pricing_group_id" not in observation_columns
+        and "competitor_listing_id" not in observation_columns
+    ):
         with op.batch_alter_table("competitor_observations") as batch:
             batch.add_column(
                 sa.Column("pricing_group_id", sa.Integer(), nullable=True)

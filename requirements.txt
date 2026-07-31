@@ -9,3 +9,4 @@ apscheduler==3.11.0
 python-multipart==0.0.20
 passlib[bcrypt]==1.7.4
 eval-type-backport==0.3.1
+boto3==1.40.0

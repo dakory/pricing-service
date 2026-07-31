@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
-from app.models import CompetitorObservation, HostexCalendarDay, HostexListing, PricingGroup, Property, Recommendation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, PricingGroup, Property, Recommendation, Run, RunKind, RunStatus, Setting
 from app.worker import create_scheduler
 
 
@@ -58,14 +58,25 @@ def test_shadow_optimizer_uses_exact_date_group_and_competitor_data():
             pricing_settings={},
         )
         db.add(prop); db.flush()
+        competitor_one = CompetitorListing(
+            pricing_group_id=group.id,
+            canonical_url=group.competitor_urls[0],
+            external_listing_id="1",
+        )
+        competitor_two = CompetitorListing(
+            pricing_group_id=group.id,
+            canonical_url=group.competitor_urls[1],
+            external_listing_id="2",
+        )
+        db.add_all([competitor_one, competitor_two]); db.flush()
         db.add(HostexListing(property_id=prop.id, hostex_property_id=1, listing_id="direct-1", channel_type="booking_site", raw={}))
         start = date(2026, 7, 22)
         for offset, inventory in enumerate([0, 1, 1, 0]):
             db.add(HostexCalendarDay(property_id=prop.id, listing_id="direct-1", channel_type="booking_site", stay_date=start.replace(day=start.day + offset), price=Decimal("1000000"), inventory=inventory, minimum_stay=3, raw={}, imported_at=datetime.now(timezone.utc)))
         for offset in range(4):
             stay_date = start.replace(day=start.day + offset)
-            db.add(CompetitorObservation(pricing_group_id=group.id, url=group.competitor_urls[0], stay_date=stay_date, price=Decimal("1200000"), available=True, currency="IDR", scraped_at=datetime.now(timezone.utc), parser_version="test"))
-            db.add(CompetitorObservation(pricing_group_id=group.id, url=group.competitor_urls[1], stay_date=stay_date, price=None, available=False, currency="IDR", scraped_at=datetime.now(timezone.utc), parser_version="test"))
+            db.add(CompetitorObservation(competitor_listing_id=competitor_one.id, stay_date=stay_date, price=Decimal("1200000"), available=True, available_for_checkin=True, minimum_stay=2, currency="IDR", scraped_at=datetime.now(timezone.utc), parser_version="test", price_method="test"))
+            db.add(CompetitorObservation(competitor_listing_id=competitor_two.id, stay_date=stay_date, price=None, available=False, available_for_checkin=False, minimum_stay=None, currency="IDR", scraped_at=datetime.now(timezone.utc), parser_version="test", price_method="test"))
         db.commit()
         assert generate_price_recommendations(db, horizon_days=4, today=start) == 2
         gap_day = db.scalar(select(Recommendation).where(Recommendation.property_id == prop.id, Recommendation.stay_date == date(2026, 7, 23)))

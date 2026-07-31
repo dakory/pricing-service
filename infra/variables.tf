@@ -33,3 +33,21 @@ variable "app_volume_size" {
   type        = number
   default     = 20
 }
+
+variable "competitor_lambda_image_uri" {
+  description = "Immutable ECR image URI for the competitor Lambda; leave empty during the initial repository-only apply"
+  type        = string
+  default     = ""
+}
+
+variable "competitor_callback_url" {
+  description = "Authenticated backend endpoint receiving competitor scrape results"
+  type        = string
+  default     = ""
+}
+
+variable "competitor_lambda_timeout" {
+  description = "Maximum collector execution time in seconds"
+  type        = number
+  default     = 60
+}

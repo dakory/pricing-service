@@ -1,22 +1,31 @@
 from __future__ import annotations
 
+import hmac
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import clear_session, create_session, require_csrf, require_session, verify_admin
 from app.config import get_settings
+from app.competitor_scrapes import (
+    ensure_no_overlapping_run,
+    invoke_collector,
+    pending_dates,
+    validate_scrape_range,
+)
+from app.competitors import sync_group_competitor_listings
+from app.competitor_prices import normalize_competitor_price
 from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_hostex
 from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
-from app.models import AdminSession, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Run, Setting
+from app.models import AdminSession, CompetitorDateError, CompetitorListing, CompetitorObservation, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Run, Setting
 from app.models import RunKind, RunStatus
 from app.pricing import merge_pricing_configuration
-from app.schemas import ModeUpdate, OverrideCreate, PricingConfiguration, PricingConfigurationOverride, PricingGroupCreate, PricingGroupUpdate, PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas import CompetitorScrapeCallback, CompetitorScrapeCreate, ModeUpdate, OverrideCreate, PricingConfiguration, PricingConfigurationOverride, PricingGroupCreate, PricingGroupUpdate, PropertyCreate, PropertyRead, PropertyUpdate
 
 router = APIRouter(prefix="/api")
 
@@ -97,6 +106,11 @@ def create_pricing_group(
         competitor_urls=list(dict.fromkeys(payload.competitor_urls)),
     )
     db.add(item)
+    db.flush()
+    try:
+        sync_group_competitor_listings(db, item)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     db.commit()
     db.refresh(item)
     return {"id": item.id}
@@ -128,6 +142,11 @@ def update_pricing_group(
         )
     for key, value in values.items():
         setattr(item, key, value)
+    if "competitor_urls" in values:
+        try:
+            sync_group_competitor_listings(db, item)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     db.commit()
     return {"id": item.id}
 
@@ -301,6 +320,269 @@ def list_runs(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_da
         }
         for item in items
     ]
+
+
+@router.get("/competitors", dependencies=[Depends(require_session)])
+def list_competitors(db: Session = Depends(get_database_session)):
+    """List normalized competitors with freshness and collection status."""
+
+    rows = db.execute(
+        select(CompetitorListing, PricingGroup.name)
+        .join(PricingGroup)
+        .order_by(PricingGroup.name, CompetitorListing.external_listing_id)
+    ).all()
+    return [
+        {
+            "id": item.id,
+            "pricing_group_id": item.pricing_group_id,
+            "pricing_group_name": group_name,
+            "canonical_url": item.canonical_url,
+            "external_listing_id": item.external_listing_id,
+            "current_minimum_stay": item.current_minimum_stay,
+            "last_scraped_at": item.last_scraped_at,
+            "last_error": item.last_error,
+        }
+        for item, group_name in rows
+    ]
+
+
+@router.post("/competitor-scrapes", dependencies=[Depends(require_csrf)])
+def create_competitor_scrape(
+    payload: CompetitorScrapeCreate,
+    db: Session = Depends(get_database_session),
+):
+    """Create and asynchronously invoke one granular competitor scrape."""
+
+    settings = get_settings()
+    try:
+        validate_scrape_range(
+            payload.start_date,
+            payload.end_date,
+            settings.competitor_scrape_max_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    listing = db.get(CompetitorListing, payload.competitor_listing_id)
+    if not listing:
+        raise HTTPException(404, "Competitor listing not found")
+    ensure_no_overlapping_run(
+        db, listing.id, payload.start_date, payload.end_date
+    )
+    dates, skipped = pending_dates(
+        db,
+        listing.id,
+        payload.start_date,
+        payload.end_date,
+        payload.force_refresh,
+    )
+    summary = {
+        "phase": "queued",
+        "competitor_listing_id": listing.id,
+        "external_listing_id": listing.external_listing_id,
+        "start_date": payload.start_date.isoformat(),
+        "end_date": payload.end_date.isoformat(),
+        "requested_dates": [item.isoformat() for item in dates],
+        "skipped_dates": [item.isoformat() for item in skipped],
+        "force_refresh": payload.force_refresh,
+    }
+    if not dates:
+        run = Run(
+            kind=RunKind.scrape,
+            status=RunStatus.skipped,
+            summary={**summary, "phase": "completed", "reason": "all_dates_fresh"},
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.commit()
+        return {"run_id": run.id, "status": run.status.value, "summary": run.summary}
+    run = Run(kind=RunKind.scrape, status=RunStatus.running, summary=summary)
+    db.add(run)
+    db.commit()
+    try:
+        invoke_collector(run, listing, dates)
+    except Exception as exc:
+        run.status = RunStatus.failed
+        run.error = str(exc)
+        run.finished_at = datetime.now(timezone.utc)
+        run.summary = {**summary, "phase": "invocation_failed"}
+        db.commit()
+        raise HTTPException(502, "Collector invocation failed; see run history") from exc
+    run.summary = {**summary, "phase": "collecting"}
+    db.commit()
+    return {"run_id": run.id, "status": run.status.value, "summary": run.summary}
+
+
+@router.get(
+    "/competitor-scrapes/{run_id}", dependencies=[Depends(require_session)]
+)
+def competitor_scrape_status(
+    run_id: int, db: Session = Depends(get_database_session)
+):
+    """Return status and details for one competitor scrape run."""
+
+    run = db.get(Run, run_id)
+    if not run or run.kind != RunKind.scrape:
+        raise HTTPException(404, "Competitor scrape run not found")
+    return {
+        "run_id": run.id,
+        "status": run.status.value,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "summary": run.summary,
+        "error": run.error,
+    }
+
+
+def require_competitor_callback(
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Authenticate the internal collector callback using a bearer token."""
+
+    expected = get_settings().competitor_callback_token
+    supplied = (
+        authorization.removeprefix("Bearer ")
+        if authorization and authorization.startswith("Bearer ")
+        else ""
+    )
+    if not expected or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(401, "Invalid callback credentials")
+
+
+@router.post(
+    "/internal/competitor-observations",
+    dependencies=[Depends(require_competitor_callback)],
+)
+def receive_competitor_observations(
+    payload: CompetitorScrapeCallback,
+    db: Session = Depends(get_database_session),
+):
+    """Atomically persist an authenticated asynchronous collector result."""
+
+    run = db.get(Run, payload.run_id)
+    if not run or run.kind != RunKind.scrape:
+        raise HTTPException(404, "Competitor scrape run not found")
+    summary = run.summary or {}
+    listing = db.get(CompetitorListing, summary.get("competitor_listing_id"))
+    if not listing or listing.external_listing_id != payload.external_listing_id:
+        raise HTTPException(409, "Callback listing does not match its run")
+    if (
+        summary.get("start_date") != payload.start_date.isoformat()
+        or summary.get("end_date") != payload.end_date.isoformat()
+    ):
+        raise HTTPException(409, "Callback range does not match its run")
+    if run.status != RunStatus.running:
+        return {"run_id": run.id, "status": run.status.value, "idempotent": True}
+    expected_dates = set(summary.get("requested_dates", []))
+    received_dates = {item.stay_date.isoformat() for item in payload.observations}
+    error_dates = {item.stay_date.isoformat() for item in payload.date_errors}
+    if payload.status in {"succeeded", "partially_succeeded"} and (
+        received_dates | error_dates
+    ) != expected_dates:
+        raise HTTPException(
+            422,
+            "Callback must classify every requested date exactly once",
+        )
+    now = datetime.now(timezone.utc)
+    if payload.status in {"failed", "source_not_configured"}:
+        run.status = RunStatus.failed
+        run.error = payload.error or payload.status
+        run.finished_at = now
+        run.summary = {
+            **summary,
+            "phase": "completed",
+            "result_status": payload.status,
+        }
+        listing.last_error = run.error
+        db.commit()
+        return {"run_id": run.id, "status": run.status.value}
+    observations = []
+    quotes_by_observation: list[tuple[CompetitorObservation, list]] = []
+    try:
+        for item in payload.observations:
+            normalized_price, price_method = normalize_competitor_price(item)
+            observation = CompetitorObservation(
+                competitor_listing_id=listing.id,
+                scrape_run_id=run.id,
+                stay_date=item.stay_date,
+                price=normalized_price,
+                available=item.available,
+                available_for_checkin=item.available_for_checkin,
+                minimum_stay=item.min_nights,
+                currency=item.currency.upper(),
+                scraped_at=item.scraped_at,
+                parser_version=item.parser_version,
+                price_method=price_method,
+            )
+            observations.append(observation)
+            quotes_by_observation.append((observation, item.stay_quotes))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.add_all(observations)
+    db.flush()
+    db.add_all(
+        [
+            CompetitorStayQuote(
+                competitor_observation_id=observation.id,
+                check_out_date=quote.check_out_date,
+                stay_nights=quote.stay_nights,
+                total_price=quote.total_price,
+                accommodation_subtotal=quote.accommodation_subtotal,
+                cleaning_fee=quote.cleaning_fee,
+                taxes=quote.taxes,
+                other_excluded_fees=quote.other_excluded_fees,
+                raw=quote.raw,
+            )
+            for observation, quotes in quotes_by_observation
+            for quote in quotes
+        ]
+    )
+    db.add_all(
+        [
+            CompetitorDateError(
+                scrape_run_id=run.id,
+                competitor_listing_id=listing.id,
+                stay_date=item.stay_date,
+                code=item.code,
+                message=item.message,
+            )
+            for item in payload.date_errors
+        ]
+    )
+    checkin_observations = sorted(
+        (
+            item
+            for item in payload.observations
+            if (
+                item.stay_date >= date.today()
+                and item.available_for_checkin
+                and item.min_nights is not None
+            )
+        ),
+        key=lambda item: item.stay_date,
+    )
+    if checkin_observations:
+        listing.current_minimum_stay = checkin_observations[0].min_nights
+    listing.last_scraped_at = max(item.scraped_at for item in payload.observations)
+    date_error_count = len(payload.date_errors)
+    listing.last_error = (
+        f"{date_error_count} date(s) failed" if date_error_count else None
+    )
+    run.status = (
+        RunStatus.partially_succeeded
+        if date_error_count
+        else RunStatus.succeeded
+    )
+    run.error = listing.last_error
+    run.finished_at = now
+    run.summary = {
+        **summary,
+        "phase": "completed",
+        "result_status": run.status.value,
+        "observation_count": len(observations),
+        "date_error_count": date_error_count,
+    }
+    db.commit()
+    return {"run_id": run.id, "status": run.status.value}
 
 
 @router.get("/integrations/hostex", dependencies=[Depends(require_session)])

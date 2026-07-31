@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
@@ -161,4 +161,129 @@ class ModeUpdate(BaseModel):
 
         if self.mode == "production" and not self.activation_date:
             raise ValueError("production mode requires activation_date")
+        return self
+
+
+class CompetitorScrapeCreate(BaseModel):
+    """Validate a granular manual competitor collection request."""
+
+    competitor_listing_id: int
+    start_date: date
+    end_date: date
+    force_refresh: bool = False
+
+    @model_validator(mode="after")
+    def valid_date_range(self):
+        """Require an ordered inclusive date range."""
+
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must not precede start_date")
+        return self
+
+
+class CompetitorStayQuoteInput(BaseModel):
+    """Validate one raw stay quote without deriving a nightly price."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    check_out_date: date
+    stay_nights: int = Field(ge=1)
+    total_price: Decimal = Field(ge=0)
+    accommodation_subtotal: Decimal | None = Field(default=None, ge=0)
+    cleaning_fee: Decimal | None = Field(default=None, ge=0)
+    taxes: Decimal | None = Field(default=None, ge=0)
+    other_excluded_fees: Decimal | None = Field(default=None, ge=0)
+    raw: dict = Field(default_factory=dict)
+
+
+class CompetitorObservationInput(BaseModel):
+    """Validate raw calendar facts and stay quotes returned by the collector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stay_date: date
+    currency: str = Field(min_length=3, max_length=3)
+    available: bool
+    available_for_checkin: bool
+    min_nights: int | None = Field(default=None, ge=1)
+    stay_quotes: list[CompetitorStayQuoteInput] = Field(default_factory=list)
+    scraped_at: datetime
+    parser_version: str = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def valid_quotes(self):
+        """Require usable, non-duplicated quotes for each available date."""
+
+        if self.available and not self.stay_quotes:
+            raise ValueError("available observations require stay_quotes")
+        check_out_dates = [item.check_out_date for item in self.stay_quotes]
+        if len(check_out_dates) != len(set(check_out_dates)):
+            raise ValueError("stay_quotes contain duplicate check-out dates")
+        for quote in self.stay_quotes:
+            if quote.check_out_date != self.stay_date + timedelta(
+                days=quote.stay_nights
+            ):
+                raise ValueError("stay quote dates do not match stay_nights")
+        return self
+
+
+class CompetitorDateErrorInput(BaseModel):
+    """Validate one recoverable failure scoped to a requested date."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stay_date: date
+    code: str = Field(min_length=1, max_length=50)
+    message: str = Field(min_length=1, max_length=500)
+
+
+class CompetitorScrapeCallback(BaseModel):
+    """Validate an asynchronous competitor collector result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: int
+    external_listing_id: str = Field(min_length=1, max_length=150)
+    start_date: date
+    end_date: date
+    status: Literal[
+        "succeeded",
+        "partially_succeeded",
+        "failed",
+        "source_not_configured",
+    ]
+    observations: list[CompetitorObservationInput] = Field(default_factory=list)
+    date_errors: list[CompetitorDateErrorInput] = Field(default_factory=list)
+    error: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def valid_result(self):
+        """Require observations only for successful in-range results."""
+
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must not precede start_date")
+        if self.status == "succeeded" and (
+            not self.observations or self.date_errors
+        ):
+            raise ValueError("successful callbacks require observations")
+        if self.status == "partially_succeeded" and (
+            not self.observations or not self.date_errors
+        ):
+            raise ValueError(
+                "partial callbacks require observations and date_errors"
+            )
+        if self.status in {"failed", "source_not_configured"} and (
+            self.observations or self.date_errors
+        ):
+            raise ValueError("global failures must not contain dated results")
+        if any(
+            item.stay_date < self.start_date or item.stay_date > self.end_date
+            for item in [*self.observations, *self.date_errors]
+        ):
+            raise ValueError("dated result is outside the requested range")
+        dates = [
+            item.stay_date for item in [*self.observations, *self.date_errors]
+        ]
+        if len(dates) != len(set(dates)):
+            raise ValueError("callback contains duplicate dated results")
         return self

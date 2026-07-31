@@ -25,3 +25,19 @@ output "backup_bucket" {
 output "hostex_parameter_name" {
   value = aws_ssm_parameter.hostex_token.name
 }
+
+output "competitor_lambda_repository_url" {
+  value = aws_ecr_repository.competitor_lambda.repository_url
+}
+
+output "competitor_lambda_name" {
+  value = try(aws_lambda_function.competitor_collector[0].function_name, null)
+}
+
+output "competitor_lambda_arn" {
+  value = try(aws_lambda_function.competitor_collector[0].arn, null)
+}
+
+output "competitor_callback_parameter_name" {
+  value = aws_ssm_parameter.competitor_callback_token.name
+}

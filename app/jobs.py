@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import CompetitorObservation, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
 from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, merge_pricing_configuration
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
@@ -130,15 +130,16 @@ def pricing_configuration(
 def latest_competitor_observations(
     db: Session, pricing_group: PricingGroup, start: date, horizon_end: date
 ) -> dict[date, dict[str, CompetitorObservation]]:
-    """Group the latest prepared observation by stay date and competitor URL."""
+    """Group latest observations by stay date and normalized competitor URL."""
 
     if not pricing_group.competitor_urls:
         return {}
     observations = db.scalars(
         select(CompetitorObservation)
+        .join(CompetitorListing)
         .where(
-            CompetitorObservation.pricing_group_id == pricing_group.id,
-            CompetitorObservation.url.in_(pricing_group.competitor_urls),
+            CompetitorListing.pricing_group_id == pricing_group.id,
+            CompetitorListing.canonical_url.in_(pricing_group.competitor_urls),
             CompetitorObservation.stay_date >= start,
             CompetitorObservation.stay_date < horizon_end,
         )
@@ -147,7 +148,7 @@ def latest_competitor_observations(
     latest: dict[date, dict[str, CompetitorObservation]] = {}
     for observation in observations:
         latest.setdefault(observation.stay_date, {}).setdefault(
-            observation.url, observation
+            observation.competitor_listing.canonical_url, observation
         )
     return latest
 

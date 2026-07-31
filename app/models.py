@@ -26,6 +26,7 @@ class RunStatus(str, enum.Enum):
 
     running = "running"
     succeeded = "succeeded"
+    partially_succeeded = "partially_succeeded"
     failed = "failed"
     skipped = "skipped"
 
@@ -44,6 +45,9 @@ class PricingGroup(Base):
     )
 
     properties: Mapped[list["Property"]] = relationship(back_populates="pricing_group")
+    competitor_listings: Mapped[list["CompetitorListing"]] = relationship(
+        back_populates="pricing_group"
+    )
 
 
 class Property(Base):
@@ -121,21 +125,122 @@ class Reservation(Base):
     status: Mapped[str] = mapped_column(String(30), default="confirmed")
 
 
+class CompetitorListing(Base):
+    """Store one normalized competitor listing monitored for a pricing group."""
+
+    __tablename__ = "competitor_listings"
+    __table_args__ = (UniqueConstraint("pricing_group_id", "canonical_url"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pricing_group_id: Mapped[int] = mapped_column(ForeignKey("pricing_groups.id"))
+    canonical_url: Mapped[str] = mapped_column(Text)
+    external_listing_id: Mapped[str] = mapped_column(String(150))
+    current_minimum_stay: Mapped[Optional[int]] = mapped_column(Integer)
+    last_scraped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow
+    )
+
+    pricing_group: Mapped[PricingGroup] = relationship(
+        back_populates="competitor_listings"
+    )
+    observations: Mapped[list["CompetitorObservation"]] = relationship(
+        back_populates="competitor_listing"
+    )
+
+
 class CompetitorObservation(Base):
     """Store one dated competitor price and availability observation."""
 
     __tablename__ = "competitor_observations"
-    __table_args__ = (UniqueConstraint("url", "stay_date", "scraped_at"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "scrape_run_id",
+            "competitor_listing_id",
+            "stay_date",
+            name="uq_competitor_observation_run_date",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    pricing_group_id: Mapped[int] = mapped_column(ForeignKey("pricing_groups.id"))
-    url: Mapped[str] = mapped_column(Text)
+    competitor_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("competitor_listings.id")
+    )
+    scrape_run_id: Mapped[Optional[int]] = mapped_column(ForeignKey("runs.id"))
     stay_date: Mapped[date] = mapped_column(Date)
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
     available: Mapped[bool] = mapped_column(Boolean)
+    available_for_checkin: Mapped[bool] = mapped_column(Boolean, default=False)
+    minimum_stay: Mapped[Optional[int]] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3), default="IDR")
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     parser_version: Mapped[str] = mapped_column(String(30))
+    price_method: Mapped[str] = mapped_column(String(40), default="unknown")
+
+    competitor_listing: Mapped[CompetitorListing] = relationship(
+        back_populates="observations"
+    )
+    stay_quotes: Mapped[list["CompetitorStayQuote"]] = relationship(
+        back_populates="observation"
+    )
+
+
+class CompetitorStayQuote(Base):
+    """Store one raw stay quote used to normalize a competitor nightly price."""
+
+    __tablename__ = "competitor_stay_quotes"
+    __table_args__ = (
+        UniqueConstraint(
+            "competitor_observation_id",
+            "check_out_date",
+            name="uq_competitor_stay_quote_checkout",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    competitor_observation_id: Mapped[int] = mapped_column(
+        ForeignKey("competitor_observations.id")
+    )
+    check_out_date: Mapped[date] = mapped_column(Date)
+    stay_nights: Mapped[int] = mapped_column(Integer)
+    total_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    accommodation_subtotal: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2)
+    )
+    cleaning_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
+    taxes: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
+    other_excluded_fees: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2)
+    )
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    observation: Mapped[CompetitorObservation] = relationship(
+        back_populates="stay_quotes"
+    )
+
+
+class CompetitorDateError(Base):
+    """Store one date-specific collection failure for a scrape run."""
+
+    __tablename__ = "competitor_date_errors"
+    __table_args__ = (
+        UniqueConstraint(
+            "scrape_run_id",
+            "competitor_listing_id",
+            "stay_date",
+            name="uq_competitor_date_error_run_date",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scrape_run_id: Mapped[int] = mapped_column(ForeignKey("runs.id"))
+    competitor_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("competitor_listings.id")
+    )
+    stay_date: Mapped[date] = mapped_column(Date)
+    code: Mapped[str] = mapped_column(String(50))
+    message: Mapped[str] = mapped_column(String(500))
 
 
 class Recommendation(Base):

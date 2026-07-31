@@ -58,6 +58,12 @@ details { min-width: 170px; } summary { cursor: pointer; color: var(--green); fo
 .listing-link:hover, .listing-link.selected { background: #e5ede7; }
 .date-filter { display: flex; gap: 8px; flex-wrap: wrap; }
 .date-filter input { border: 1px solid var(--line); background: var(--card); padding: 8px; border-radius: 7px; }
+.competitor-launch { margin-bottom: 18px; }
+.competitor-table { margin-bottom: 18px; }
+.competitor-runs > b { display: block; margin-bottom: 12px; }
+.table-link { color: var(--green); font-weight: 700; }
+.error-cell { color: #a44738; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+button:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 800px) { .shell { grid-template-columns: 1fr; } aside { display: none; } main { padding: 22px; } .stats { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 1000px) { .hostex-layout { grid-template-columns: 1fr; } .listing-links { max-height: 300px; } }
 @media (max-width: 900px) { .form-grid, .form-grid.four { grid-template-columns: 1fr 1fr; }.factor-grid, .factor-grid.months { grid-template-columns: repeat(4, 1fr); } }
