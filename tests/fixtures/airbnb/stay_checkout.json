@@ -1,0 +1,51 @@
+{
+  "data": {
+    "presentation": {
+      "stayCheckout": {
+        "sections": {
+          "temporaryQuickPayData": {
+            "bootstrapPayments": {
+              "productPriceBreakdown": {
+                "priceBreakdown": {
+                  "priceItems": [
+                    {
+                      "localizedTitle": "1 night x Rp 2,125,500.00",
+                      "total": {
+                        "amountFormatted": "Rp 2,125,500.00",
+                        "amountMicros": "2125500000000",
+                        "currency": "IDR"
+                      },
+                      "type": "ACCOMMODATION"
+                    },
+                    {
+                      "localizedTitle": "Special offer",
+                      "total": {
+                        "amountFormatted": "-Rp 425,100.00",
+                        "amountMicros": "-425100000000",
+                        "currency": "IDR"
+                      },
+                      "type": "SMART_PROMOTION"
+                    }
+                  ],
+                  "total": {
+                    "localizedTitle": "Total",
+                    "total": {
+                      "amountFormatted": "Rp 1,700,400.00",
+                      "amountMicros": "1700400000000",
+                      "currency": "IDR"
+                    },
+                    "type": "TOTAL"
+                  }
+                },
+                "status": {
+                  "message": null,
+                  "statusCode": "OK"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

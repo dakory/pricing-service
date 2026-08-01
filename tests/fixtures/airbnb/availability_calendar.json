@@ -1,0 +1,66 @@
+{
+  "data": {
+    "merlin": {
+      "pdpAvailabilityCalendar": {
+        "calendarMonths": [
+          {
+            "month": 7,
+            "year": 2026,
+            "days": [
+              {
+                "calendarDate": "2026-07-01",
+                "available": false,
+                "availableForCheckin": false,
+                "availableForCheckout": false,
+                "bookable": null,
+                "minNights": 1
+              }
+            ]
+          },
+          {
+            "month": 8,
+            "year": 2026,
+            "days": [
+              {
+                "calendarDate": "2026-08-01",
+                "available": false,
+                "availableForCheckin": false,
+                "availableForCheckout": false,
+                "bookable": false,
+                "minNights": 1
+              },
+              {
+                "calendarDate": "2026-08-02",
+                "available": true,
+                "availableForCheckin": true,
+                "availableForCheckout": false,
+                "bookable": true,
+                "minNights": 1
+              },
+              {
+                "calendarDate": "2026-08-03",
+                "available": true,
+                "availableForCheckin": true,
+                "availableForCheckout": true,
+                "bookable": true,
+                "minNights": 1
+              },
+              {
+                "calendarDate": "2026-08-04",
+                "available": false,
+                "availableForCheckin": false,
+                "availableForCheckout": true,
+                "bookable": false,
+                "minNights": 1
+              }
+            ]
+          }
+        ],
+        "metadata": {
+          "constantMinNights": 1,
+          "onlyShowAvailableForCheckinOnDatepicker": null
+        }
+      }
+    }
+  }
+}

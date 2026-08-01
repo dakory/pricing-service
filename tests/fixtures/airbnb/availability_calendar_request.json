@@ -1,0 +1,48 @@
+{
+  "method": "GET",
+  "origin": "https://www.airbnb.com",
+  "path": "/api/v3/PdpAvailabilityCalendar/be60714ead0a30db42ce6471ddad6a8f3855df0ed400b79282dd0bb8cecdf201",
+  "query": {
+    "operationName": "PdpAvailabilityCalendar",
+    "locale": "en",
+    "currency": "IDR",
+    "variables": {
+      "request": {
+        "count": 12,
+        "listingId": "1721566348393412409",
+        "month": 7,
+        "year": 2026,
+        "returnPropertyLevelCalendarIfApplicable": false
+      }
+    },
+    "extensions": {
+      "persistedQuery": {
+        "version": 1,
+        "sha256Hash": "be60714ead0a30db42ce6471ddad6a8f3855df0ed400b79282dd0bb8cecdf201"
+      }
+    }
+  },
+  "headers": {
+    "content-type": "application/json",
+    "ect": "4g",
+    "referer": "https://www.airbnb.com/rooms/1721566348393412409?source_impression_id=p3_1785528718_P33OyfpWTk4FMh_u&check_in=2026-08-10&guests=1&adults=1&check_out=2026-08-11&currency=IDR",
+    "sec-ch-device-memory": "16",
+    "sec-ch-dpr": "2",
+    "sec-ch-ua": "\"Chromium\";v=\"148\", \"Google Chrome\";v=\"148\", \"Not/A)Brand\";v=\"99\"",
+    "sec-ch-ua-mobile": "?1",
+    "sec-ch-ua-platform": "\"Android\"",
+    "sec-ch-ua-platform-version": "\"6.0\"",
+    "sec-ch-viewport-width": "1024",
+    "user-agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36",
+    "x-airbnb-api-key": "d306zoyjsyarp7ifhu67rjxn52tv0t20",
+    "x-airbnb-client-trace-id": "047zd9s1tjvffj0kipgic0yqkmjc",
+    "x-airbnb-graphql-platform": "web",
+    "x-airbnb-graphql-platform-client": "minimalist-niobe",
+    "x-airbnb-network-log-link": "0002a451nwelbq1t6imcq0w4zuj3",
+    "x-airbnb-supports-airlock-v2": "true",
+    "x-client-request-id": "1ywsrcs1ymd3mh1ae8bst071vyuq",
+    "x-client-version": "49245087852b17c93d16b70c1e0067e1aea58f56",
+    "x-csrf-token": "",
+    "x-csrf-without-token": "1"
+  }
+}
