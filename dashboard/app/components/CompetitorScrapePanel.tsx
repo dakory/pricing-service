@@ -11,6 +11,8 @@ type Competitor = {
   current_minimum_stay: number | null;
   last_scraped_at: string | null;
   last_error: string | null;
+  last_collection_mode: string | null;
+  last_price_method: string | null;
 };
 type Run = {
   id: number;
@@ -19,6 +21,7 @@ type Run = {
   finished_at: string | null;
   summary: Record<string, unknown>;
   error: string | null;
+  batches?: Array<{ operation: string; status: string; expected_quote_count: number }>;
 };
 
 const csrf = () => decodeURIComponent(document.cookie.split("; ").find(row => row.startsWith("pricing_csrf="))?.split("=")[1] ?? "");
@@ -39,6 +42,11 @@ export function CompetitorScrapePanel({ competitors, initialRuns }: { competitor
       const response = await fetch(`/api/competitor-scrapes/${activeRunId}`);
       if (!response.ok) return;
       const run = await response.json();
+      const batches = Array.isArray(run.batches) ? run.batches : [];
+      const completed = batches.filter((batch: { status: string }) =>
+        ["succeeded", "partially_succeeded", "failed"].includes(batch.status)
+      ).length;
+      setMessage(`${String(run.summary?.phase ?? "running")} · ${completed}/${batches.length} batches`);
       if (run.status !== "running") {
         setActiveRunId(null);
         setMessage(run.error ?? run.summary?.result_status ?? run.status);
@@ -57,6 +65,7 @@ export function CompetitorScrapePanel({ competitors, initialRuns }: { competitor
       start_date: form.get("start_date"),
       end_date: form.get("end_date"),
       force_refresh: form.get("force_refresh") === "on",
+      collection_mode: form.get("collection_mode") || null,
     };
     const response = await fetch("/api/competitor-scrapes", {
       method: "POST",
@@ -81,13 +90,14 @@ export function CompetitorScrapePanel({ competitors, initialRuns }: { competitor
       </select></label>
       <label>From<input name="start_date" type="date" defaultValue={today} required/></label>
       <label>To<input name="end_date" type="date" defaultValue={isoDate(nextWeek)} required/></label>
+      <label>Mode<select name="collection_mode" defaultValue=""><option value="">Automatic</option><option value="precise">Precise</option><option value="rough">Rough</option></select></label>
       <label className="toggle lower"><input name="force_refresh" type="checkbox"/> Force refresh</label>
       <button className="button" disabled={!competitors.length || activeRunId !== null}>{activeRunId ? "Running…" : "Start collection"}</button>
       <span className={message.toLowerCase().includes("error") ? "error" : "muted"}>{message}</span>
     </form>
     {!competitors.length ? <div className="card empty">Add canonical competitor URLs to a pricing group first.</div> :
-      <div className="card calendar competitor-table"><table><thead><tr><th>Group</th><th>Listing</th><th>Current minNights</th><th>Last success</th><th>Last error</th></tr></thead><tbody>
-        {competitors.map(item => <tr key={item.id}><td>{item.pricing_group_name}</td><td><a className="table-link" href={item.canonical_url} target="_blank" rel="noreferrer">{item.external_listing_id}</a></td><td>{item.current_minimum_stay ?? "—"}</td><td>{item.last_scraped_at ? new Date(item.last_scraped_at).toLocaleString() : "Never"}</td><td className="error-cell">{item.last_error ?? "—"}</td></tr>)}
+      <div className="card calendar competitor-table"><table><thead><tr><th>Group</th><th>Listing</th><th>Current minNights</th><th>Mode / method</th><th>Last success</th><th>Last error</th></tr></thead><tbody>
+        {competitors.map(item => <tr key={item.id}><td>{item.pricing_group_name}</td><td><a className="table-link" href={item.canonical_url} target="_blank" rel="noreferrer">{item.external_listing_id}</a></td><td>{item.current_minimum_stay ?? "—"}</td><td>{item.last_collection_mode ?? "—"} / {item.last_price_method ?? "—"}</td><td>{item.last_scraped_at ? new Date(item.last_scraped_at).toLocaleString() : "Never"}</td><td className="error-cell">{item.last_error ?? "—"}</td></tr>)}
       </tbody></table></div>}
     <div className="card calendar competitor-runs"><b>Recent collection runs</b>{initialRuns.length ? <table><thead><tr><th>Started</th><th>Listing</th><th>Range</th><th>Skipped</th><th>Status</th><th>Result</th></tr></thead><tbody>
       {initialRuns.map(run => <tr key={run.id}><td>{new Date(run.started_at).toLocaleString()}</td><td>{String(run.summary.external_listing_id ?? "—")}</td><td>{String(run.summary.start_date ?? "—")} – {String(run.summary.end_date ?? "—")}</td><td>{Array.isArray(run.summary.skipped_dates) ? run.summary.skipped_dates.length : 0}</td><td><span className="pill">{run.status}</span></td><td>{run.error ?? String(run.summary.result_status ?? run.summary.reason ?? "—")}</td></tr>)}

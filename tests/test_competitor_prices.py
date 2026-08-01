@@ -1,72 +1,106 @@
+from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
-from app.competitor_prices import normalize_competitor_price
-from app.schemas import CompetitorObservationInput
+import pytest
+
+from app.competitor_scrapes import calculate_target_price, plan_target
 
 
-def observation(**changes):
-    """Build one valid raw competitor observation."""
+def calendar(start: date, count: int, minimum_stay: int = 2):
+    """Return a continuous bookable calendar mapping."""
 
-    values = {
-        "stay_date": "2026-08-01",
-        "currency": "IDR",
-        "available": True,
-        "available_for_checkin": True,
-        "min_nights": 3,
-        "stay_quotes": [{
-            "check_out_date": "2026-08-04",
-            "stay_nights": 3,
-            "total_price": "3900000",
-            "cleaning_fee": "300000",
-            "taxes": "300000",
-            "other_excluded_fees": "0",
-        }],
-        "scraped_at": "2026-07-30T12:00:00Z",
-        "parser_version": "fixture-v1",
+    from datetime import timedelta
+
+    return {
+        start + timedelta(days=offset): (True, minimum_stay)
+        for offset in range(count)
     }
-    values.update(changes)
-    return CompetitorObservationInput.model_validate(values)
 
 
-def test_backend_calculates_minimum_stay_average_without_fees():
-    price, method = normalize_competitor_price(observation())
-    assert price == Decimal("1100000")
+def target(method: str, quote_ids: list[str], minimum_stay: int = 2):
+    """Build the attributes required by the pure price calculator."""
+
+    return SimpleNamespace(
+        price_method=method,
+        quote_ids=quote_ids,
+        minimum_stay=minimum_stay,
+    )
+
+
+def quotes(**values):
+    """Build quote rows keyed by identity."""
+
+    return {
+        key: SimpleNamespace(total_price=Decimal(str(value)))
+        for key, value in values.items()
+    }
+
+
+def test_single_night_uses_the_guest_total():
+    assert calculate_target_price(
+        target("single_night", ["one"], 1), quotes(one="1700400")
+    ) == Decimal("1700400")
+
+
+def test_quote_difference_calculates_the_added_target_night():
+    rows = quotes(long="6100000", short="4500000")
+    assert calculate_target_price(
+        target("quote_difference_left", ["long", "short"]), rows
+    ) == Decimal("1600000")
+    assert calculate_target_price(
+        target("quote_difference_right", ["long", "short"]), rows
+    ) == Decimal("1600000")
+
+
+def test_minimum_stay_average_uses_decimal_arithmetic():
+    assert calculate_target_price(
+        target("minimum_stay_average", ["stay"], 3),
+        quotes(stay="5100001"),
+    ) == Decimal("5100001") / Decimal(3)
+
+
+def test_non_positive_quote_difference_is_rejected():
+    with pytest.raises(ValueError, match="positive"):
+        calculate_target_price(
+            target("quote_difference_left", ["long", "short"]),
+            quotes(long="100", short="100"),
+        )
+
+
+def test_precise_plan_uses_left_then_right_then_average():
+    stay_date = date(2026, 8, 10)
+    left_calendar = calendar(date(2026, 8, 8), 5)
+    method, intervals = plan_target(7, 2, stay_date, left_calendar, "precise")
+    assert method == "quote_difference_left"
+    assert [(item[1], item[2]) for item in intervals] == [
+        (date(2026, 8, 8), date(2026, 8, 11)),
+        (date(2026, 8, 8), date(2026, 8, 10)),
+    ]
+
+    right_calendar = calendar(date(2026, 8, 10), 4)
+    method, intervals = plan_target(7, 2, stay_date, right_calendar, "precise")
+    assert method == "quote_difference_right"
+    assert [(item[1], item[2]) for item in intervals] == [
+        (date(2026, 8, 10), date(2026, 8, 13)),
+        (date(2026, 8, 11), date(2026, 8, 13)),
+    ]
+
+    fallback_calendar = calendar(date(2026, 8, 10), 2)
+    method, intervals = plan_target(
+        7, 2, stay_date, fallback_calendar, "precise"
+    )
     assert method == "minimum_stay_average"
-
-
-def test_identified_accommodation_subtotal_takes_precedence():
-    item = observation(stay_quotes=[{
-        "check_out_date": "2026-08-04",
-        "stay_nights": 3,
-        "total_price": "4500000",
-        "accommodation_subtotal": "3000000",
-        "cleaning_fee": "900000",
-        "taxes": "600000",
-    }])
-    assert normalize_competitor_price(item) == (
-        Decimal("1000000"),
-        "minimum_stay_average",
+    assert (intervals[0][1], intervals[0][2]) == (
+        date(2026, 8, 10),
+        date(2026, 8, 12),
     )
 
 
-def test_one_night_quote_is_an_exact_nightly_price():
-    item = observation(
-        min_nights=1,
-        stay_quotes=[{
-            "check_out_date": "2026-08-02",
-            "stay_nights": 1,
-            "total_price": "1250000",
-            "cleaning_fee": "250000",
-        }],
+def test_rough_plan_never_requests_difference_pairs():
+    stay_date = date(2026, 11, 10)
+    method, intervals = plan_target(
+        7, 2, stay_date, calendar(stay_date, 3), "rough"
     )
-    assert normalize_competitor_price(item) == (Decimal("1000000"), "exact")
-
-
-def test_unavailable_date_has_no_normalized_price():
-    item = observation(
-        available=False,
-        available_for_checkin=False,
-        min_nights=None,
-        stay_quotes=[],
-    )
-    assert normalize_competitor_price(item) == (None, "unavailable")
+    assert method == "minimum_stay_average"
+    assert len(intervals) == 1

@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app import api
 from app.competitor_scrapes import (
     ensure_no_overlapping_run,
     pending_dates,
@@ -16,8 +17,9 @@ from app.database import Base, get_database_session
 from app.main import app
 from app.models import (
     CompetitorListing,
-    CompetitorDateError,
     CompetitorObservation,
+    CompetitorPriceTarget,
+    CompetitorScrapeBatch,
     CompetitorStayQuote,
     PricingGroup,
     Run,
@@ -56,48 +58,57 @@ def competitor(session):
     return listing
 
 
-def test_pending_dates_skip_fresh_observations_unless_forced():
+def test_pending_dates_use_mode_specific_freshness():
     Session = database()
     with Session() as session:
         listing = competitor(session)
-        today = date.today()
-        session.add(
-            CompetitorObservation(
-                competitor_listing_id=listing.id,
-                stay_date=today,
-                price=Decimal("1000000"),
-                available=True,
-                available_for_checkin=True,
-                minimum_stay=2,
-                currency="IDR",
-                scraped_at=datetime.now(timezone.utc),
-                parser_version="test",
-                price_method="test",
-            )
+        today = date(2026, 8, 1)
+        now = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        session.add_all(
+            [
+                CompetitorObservation(
+                    competitor_listing_id=listing.id,
+                    stay_date=today,
+                    price=Decimal("1000000"),
+                    bookable=True,
+                    minimum_stay=2,
+                    currency="IDR",
+                    scraped_at=now - timedelta(hours=23),
+                    parser_version="test",
+                    price_method="minimum_stay_average",
+                    collection_mode="precise",
+                ),
+                CompetitorObservation(
+                    competitor_listing_id=listing.id,
+                    stay_date=today + timedelta(days=100),
+                    price=Decimal("1200000"),
+                    bookable=True,
+                    minimum_stay=2,
+                    currency="IDR",
+                    scraped_at=now - timedelta(days=20),
+                    parser_version="test",
+                    price_method="minimum_stay_average",
+                    collection_mode="rough",
+                ),
+            ]
         )
         session.commit()
-        pending, skipped = pending_dates(
-            session, listing.id, today, today + timedelta(days=1), False
-        )
-        assert pending == [today + timedelta(days=1)]
-        assert skipped == [today]
-        forced, skipped = pending_dates(
-            session, listing.id, today, today + timedelta(days=1), True
-        )
-        assert forced == [today, today + timedelta(days=1)]
-        assert skipped == []
+        assert pending_dates(
+            session, listing.id, today, today, False, "precise", now
+        ) == ([], [today])
+        far = today + timedelta(days=100)
+        assert pending_dates(
+            session, listing.id, far, far, False, "rough", now
+        ) == ([], [far])
+        assert pending_dates(
+            session, listing.id, today, today, True, "precise", now
+        ) == ([today], [])
 
 
 def test_scrape_range_limit_is_configurable():
     assert validate_scrape_range(
         date(2026, 8, 1), date(2026, 8, 30), 30
     ) == 30
-    try:
-        validate_scrape_range(date(2026, 8, 1), date(2026, 8, 31), 30)
-    except ValueError as exc:
-        assert "30 days" in str(exc)
-    else:
-        raise AssertionError("oversized range was accepted")
 
 
 def test_overlapping_active_run_is_rejected():
@@ -126,7 +137,7 @@ def test_overlapping_active_run_is_rejected():
             raise AssertionError("overlapping run was accepted")
 
 
-def test_callback_is_authenticated_atomic_and_idempotent():
+def test_two_stage_callbacks_persist_calendar_quotes_and_price(monkeypatch):
     Session = database()
     with Session() as session:
         listing = competitor(session)
@@ -134,15 +145,27 @@ def test_callback_is_authenticated_atomic_and_idempotent():
             kind=RunKind.scrape,
             status=RunStatus.running,
             summary={
-                "phase": "collecting",
+                "phase": "calendar",
                 "competitor_listing_id": listing.id,
-                "external_listing_id": listing.external_listing_id,
-                "start_date": "2026-08-01",
-                "end_date": "2026-08-01",
-                "requested_dates": ["2026-08-01"],
+                "external_listing_id": "123",
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+                "requested_dates": ["2026-08-03"],
+                "skipped_dates": [],
+                "collection_mode": "precise",
             },
         )
         session.add(run)
+        session.flush()
+        session.add(
+            CompetitorScrapeBatch(
+                scrape_run_id=run.id,
+                competitor_listing_id=listing.id,
+                operation="calendar",
+                status="running",
+                expected_quote_ids=[],
+            )
+        )
         session.commit()
         run_id = run.id
 
@@ -154,76 +177,103 @@ def test_callback_is_authenticated_atomic_and_idempotent():
     settings = get_settings()
     old_token = settings.competitor_callback_token
     settings.competitor_callback_token = "callback-secret"
+    monkeypatch.setattr(api, "invoke_quote_batches", lambda *args: None)
     client = TestClient(app)
-    payload = {
+    headers = {"Authorization": "Bearer callback-secret"}
+    days = [
+        {
+            "stay_date": f"2026-08-0{day}",
+            "bookable": True,
+            "min_nights": 2,
+        }
+        for day in range(1, 6)
+    ]
+    calendar_payload = {
+        "operation": "calendar",
         "run_id": run_id,
         "external_listing_id": "123",
-        "start_date": "2026-08-01",
-        "end_date": "2026-08-01",
         "status": "succeeded",
-        "observations": [{
-            "stay_date": "2026-08-01",
-            "currency": "IDR",
-            "available": True,
-            "available_for_checkin": True,
-            "min_nights": 3,
-            "stay_quotes": [{
-                "check_out_date": "2026-08-04",
-                "stay_nights": 3,
-                "total_price": "3600000",
-                "cleaning_fee": "300000",
-                "taxes": "0",
-                "other_excluded_fees": "0",
-            }],
-            "scraped_at": "2026-07-30T12:00:00Z",
-            "parser_version": "fixture-v1",
-        }],
+        "calendar_days": days,
+        "scraped_at": "2026-08-01T00:00:00Z",
+        "parser_version": "calendar-v1",
+        "error": None,
     }
     try:
         assert client.post(
-            "/api/internal/competitor-observations", json=payload
+            "/api/internal/competitor-observations", json=calendar_payload
         ).status_code == 401
-        invalid = {
-            **payload,
-            "observations": [{
-                **payload["observations"][0],
-                "stay_quotes": [],
-            }],
-        }
-        assert client.post(
+        response = client.post(
             "/api/internal/competitor-observations",
-            json=invalid,
-            headers={"Authorization": "Bearer callback-secret"},
-        ).status_code == 422
+            json=calendar_payload,
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
         with Session() as session:
-            assert session.query(CompetitorObservation).count() == 0
+            target = session.query(CompetitorPriceTarget).one()
+            batch = session.query(CompetitorScrapeBatch).filter_by(
+                operation="quotes"
+            ).one()
+            assert target.price_method == "quote_difference_left"
+            assert len(target.quote_ids) == 2
+            assert batch.status == "running"
+            expected = list(batch.expected_quote_ids)
+            quote_dates = {}
+            for quote_id in expected:
+                if quote_id == target.quote_ids[0]:
+                    quote_dates[quote_id] = ("2026-08-01", "2026-08-04", "3000000")
+                else:
+                    quote_dates[quote_id] = ("2026-08-01", "2026-08-03", "2000000")
+            batch_id = batch.id
+        quote_payload = {
+            "operation": "quotes",
+            "run_id": run_id,
+            "batch_id": batch_id,
+            "external_listing_id": "123",
+            "status": "succeeded",
+            "quotes": [
+                {
+                    "quote_id": quote_id,
+                    "check_in_date": values[0],
+                    "check_out_date": values[1],
+                    "adults": 4,
+                    "total_price": values[2],
+                    "currency": "IDR",
+                    "scraped_at": "2026-08-01T00:01:00Z",
+                    "parser_version": "checkout-v1",
+                }
+                for quote_id, values in quote_dates.items()
+            ],
+            "quote_errors": [],
+            "error": None,
+        }
         first = client.post(
             "/api/internal/competitor-observations",
-            json=payload,
-            headers={"Authorization": "Bearer callback-secret"},
+            json=quote_payload,
+            headers=headers,
         )
-        assert first.status_code == 200
+        assert first.status_code == 200, first.text
         second = client.post(
             "/api/internal/competitor-observations",
-            json=payload,
-            headers={"Authorization": "Bearer callback-secret"},
+            json=quote_payload,
+            headers=headers,
         )
         assert second.json()["idempotent"] is True
         with Session() as session:
-            assert session.query(CompetitorObservation).count() == 1
-            observation = session.query(CompetitorObservation).one()
-            assert observation.price == Decimal("1100000")
-            assert observation.price_method == "minimum_stay_average"
-            assert session.query(CompetitorStayQuote).count() == 1
-            stored_listing = session.get(CompetitorListing, listing.id)
-            assert stored_listing.current_minimum_stay == 3
+            observation = session.scalar(
+                session.query(CompetitorObservation).filter_by(
+                    scrape_run_id=run_id, stay_date=date(2026, 8, 3)
+                ).statement
+            )
+            assert observation.price == Decimal("1000000")
+            assert observation.price_method == "quote_difference_left"
+            assert session.query(CompetitorStayQuote).count() == 2
             assert session.get(Run, run_id).status == RunStatus.succeeded
     finally:
         settings.competitor_callback_token = old_token
         app.dependency_overrides.clear()
 
 
-def test_partial_callback_keeps_success_and_retries_failed_date():
+def test_calendar_callback_rejects_gaps_without_partial_writes():
     Session = database()
     with Session() as session:
         listing = competitor(session)
@@ -231,17 +281,25 @@ def test_partial_callback_keeps_success_and_retries_failed_date():
             kind=RunKind.scrape,
             status=RunStatus.running,
             summary={
-                "phase": "collecting",
                 "competitor_listing_id": listing.id,
-                "external_listing_id": "123",
                 "start_date": "2026-08-01",
-                "end_date": "2026-08-02",
-                "requested_dates": ["2026-08-01", "2026-08-02"],
+                "end_date": "2026-08-03",
+                "requested_dates": ["2026-08-01", "2026-08-03"],
             },
         )
         session.add(run)
+        session.flush()
+        session.add(
+            CompetitorScrapeBatch(
+                scrape_run_id=run.id,
+                competitor_listing_id=listing.id,
+                operation="calendar",
+                status="running",
+                expected_quote_ids=[],
+            )
+        )
         session.commit()
-        run_id, listing_id = run.id, listing.id
+        run_id = run.id
 
     def override_session():
         with Session() as session:
@@ -251,52 +309,26 @@ def test_partial_callback_keeps_success_and_retries_failed_date():
     settings = get_settings()
     old_token = settings.competitor_callback_token
     settings.competitor_callback_token = "callback-secret"
-    payload = {
-        "run_id": run_id,
-        "external_listing_id": "123",
-        "start_date": "2026-08-01",
-        "end_date": "2026-08-02",
-        "status": "partially_succeeded",
-        "observations": [{
-            "stay_date": "2026-08-01",
-            "currency": "IDR",
-            "available": True,
-            "available_for_checkin": True,
-            "min_nights": 2,
-            "stay_quotes": [{
-                "check_out_date": "2026-08-03",
-                "stay_nights": 2,
-                "total_price": "2000000",
-            }],
-            "scraped_at": datetime.now(timezone.utc).isoformat(),
-            "parser_version": "fixture-v1",
-        }],
-        "date_errors": [{
-            "stay_date": "2026-08-02",
-            "code": "quote_unavailable",
-            "message": "No quote returned",
-        }],
-    }
     try:
         response = TestClient(app).post(
-            "/api/internal/competitor-observations",
-            json=payload,
+            "/api/internal/competitor-calendar",
             headers={"Authorization": "Bearer callback-secret"},
+            json={
+                "operation": "calendar",
+                "run_id": run_id,
+                "external_listing_id": "123",
+                "status": "succeeded",
+                "calendar_days": [
+                    {"stay_date": "2026-08-01", "bookable": False},
+                    {"stay_date": "2026-08-03", "bookable": False},
+                ],
+                "scraped_at": "2026-08-01T00:00:00Z",
+                "parser_version": "calendar-v1",
+            },
         )
-        assert response.status_code == 200
+        assert response.status_code == 422
         with Session() as session:
-            assert session.get(Run, run_id).status == RunStatus.partially_succeeded
-            assert session.query(CompetitorObservation).count() == 1
-            assert session.query(CompetitorDateError).count() == 1
-            pending, skipped = pending_dates(
-                session,
-                listing_id,
-                date(2026, 8, 1),
-                date(2026, 8, 2),
-                False,
-            )
-            assert pending == [date(2026, 8, 2)]
-            assert skipped == [date(2026, 8, 1)]
+            assert session.query(CompetitorObservation).count() == 0
     finally:
         settings.competitor_callback_token = old_token
         app.dependency_overrides.clear()

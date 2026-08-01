@@ -11,21 +11,23 @@ from sqlalchemy.orm import Session
 from app.auth import clear_session, create_session, require_csrf, require_session, verify_admin
 from app.config import get_settings
 from app.competitor_scrapes import (
-    ensure_no_overlapping_run,
-    invoke_collector,
-    pending_dates,
+    collection_mode_for_date,
+    create_quote_plan,
+    finalize_run,
+    invoke_quote_batches,
+    quote_identity,
+    start_collection_run,
     validate_scrape_range,
 )
 from app.competitors import sync_group_competitor_listings
-from app.competitor_prices import normalize_competitor_price
 from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_hostex
 from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
-from app.models import AdminSession, CompetitorDateError, CompetitorListing, CompetitorObservation, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Run, Setting
+from app.models import AdminSession, CompetitorListing, CompetitorObservation, CompetitorScrapeBatch, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Run, Setting
 from app.models import RunKind, RunStatus
 from app.pricing import merge_pricing_configuration
-from app.schemas import CompetitorScrapeCallback, CompetitorScrapeCreate, ModeUpdate, OverrideCreate, PricingConfiguration, PricingConfigurationOverride, PricingGroupCreate, PricingGroupUpdate, PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas import CompetitorCalendarCallback, CompetitorQuoteBatchCallback, CompetitorScrapeCreate, ModeUpdate, OverrideCreate, PricingConfiguration, PricingConfigurationOverride, PricingGroupCreate, PricingGroupUpdate, PropertyCreate, PropertyRead, PropertyUpdate
 
 router = APIRouter(prefix="/api")
 
@@ -331,8 +333,15 @@ def list_competitors(db: Session = Depends(get_database_session)):
         .join(PricingGroup)
         .order_by(PricingGroup.name, CompetitorListing.external_listing_id)
     ).all()
-    return [
-        {
+    result = []
+    for item, group_name in rows:
+        latest = db.scalar(
+            select(CompetitorObservation)
+            .where(CompetitorObservation.competitor_listing_id == item.id)
+            .order_by(CompetitorObservation.scraped_at.desc())
+            .limit(1)
+        )
+        result.append({
             "id": item.id,
             "pricing_group_id": item.pricing_group_id,
             "pricing_group_name": group_name,
@@ -341,9 +350,10 @@ def list_competitors(db: Session = Depends(get_database_session)):
             "current_minimum_stay": item.current_minimum_stay,
             "last_scraped_at": item.last_scraped_at,
             "last_error": item.last_error,
-        }
-        for item, group_name in rows
-    ]
+            "last_collection_mode": latest.collection_mode if latest else None,
+            "last_price_method": latest.price_method if latest else None,
+        })
+    return result
 
 
 @router.post("/competitor-scrapes", dependencies=[Depends(require_csrf)])
@@ -365,50 +375,19 @@ def create_competitor_scrape(
     listing = db.get(CompetitorListing, payload.competitor_listing_id)
     if not listing:
         raise HTTPException(404, "Competitor listing not found")
-    ensure_no_overlapping_run(
-        db, listing.id, payload.start_date, payload.end_date
-    )
-    dates, skipped = pending_dates(
-        db,
-        listing.id,
-        payload.start_date,
-        payload.end_date,
-        payload.force_refresh,
-    )
-    summary = {
-        "phase": "queued",
-        "competitor_listing_id": listing.id,
-        "external_listing_id": listing.external_listing_id,
-        "start_date": payload.start_date.isoformat(),
-        "end_date": payload.end_date.isoformat(),
-        "requested_dates": [item.isoformat() for item in dates],
-        "skipped_dates": [item.isoformat() for item in skipped],
-        "force_refresh": payload.force_refresh,
-    }
-    if not dates:
-        run = Run(
-            kind=RunKind.scrape,
-            status=RunStatus.skipped,
-            summary={**summary, "phase": "completed", "reason": "all_dates_fresh"},
-            finished_at=datetime.now(timezone.utc),
-        )
-        db.add(run)
-        db.commit()
-        return {"run_id": run.id, "status": run.status.value, "summary": run.summary}
-    run = Run(kind=RunKind.scrape, status=RunStatus.running, summary=summary)
-    db.add(run)
-    db.commit()
     try:
-        invoke_collector(run, listing, dates)
+        run = start_collection_run(
+            db,
+            listing,
+            payload.start_date,
+            payload.end_date,
+            force_refresh=payload.force_refresh,
+            collection_mode=payload.collection_mode,
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
-        run.status = RunStatus.failed
-        run.error = str(exc)
-        run.finished_at = datetime.now(timezone.utc)
-        run.summary = {**summary, "phase": "invocation_failed"}
-        db.commit()
         raise HTTPException(502, "Collector invocation failed; see run history") from exc
-    run.summary = {**summary, "phase": "collecting"}
-    db.commit()
     return {"run_id": run.id, "status": run.status.value, "summary": run.summary}
 
 
@@ -423,6 +402,11 @@ def competitor_scrape_status(
     run = db.get(Run, run_id)
     if not run or run.kind != RunKind.scrape:
         raise HTTPException(404, "Competitor scrape run not found")
+    batches = db.scalars(
+        select(CompetitorScrapeBatch).where(
+            CompetitorScrapeBatch.scrape_run_id == run.id
+        )
+    ).all()
     return {
         "run_id": run.id,
         "status": run.status.value,
@@ -430,6 +414,17 @@ def competitor_scrape_status(
         "finished_at": run.finished_at,
         "summary": run.summary,
         "error": run.error,
+        "batches": [
+            {
+                "id": item.id,
+                "operation": item.operation,
+                "status": item.status,
+                "attempt": item.attempt,
+                "expected_quote_count": len(item.expected_quote_ids or []),
+                "error": item.error,
+            }
+            for item in batches
+        ],
     }
 
 
@@ -448,141 +443,205 @@ def require_competitor_callback(
         raise HTTPException(401, "Invalid callback credentials")
 
 
+def _competitor_run_listing(
+    db: Session, run_id: int, external_listing_id: str
+) -> tuple[Run, CompetitorListing]:
+    """Load and authenticate callback ownership against persisted run metadata."""
+
+    run = db.get(Run, run_id)
+    if not run or run.kind != RunKind.scrape:
+        raise HTTPException(404, "Competitor scrape run not found")
+    listing = db.get(
+        CompetitorListing, (run.summary or {}).get("competitor_listing_id")
+    )
+    if not listing or listing.external_listing_id != external_listing_id:
+        raise HTTPException(409, "Callback listing does not match its run")
+    return run, listing
+
+
+@router.post(
+    "/internal/competitor-calendar",
+    dependencies=[Depends(require_competitor_callback)],
+)
+def receive_competitor_calendar(
+    payload: CompetitorCalendarCallback,
+    db: Session = Depends(get_database_session),
+):
+    """Persist a complete calendar and launch backend-planned quote batches."""
+
+    run, listing = _competitor_run_listing(
+        db, payload.run_id, payload.external_listing_id
+    )
+    batch = db.scalar(
+        select(CompetitorScrapeBatch).where(
+            CompetitorScrapeBatch.scrape_run_id == run.id,
+            CompetitorScrapeBatch.operation == "calendar",
+        )
+    )
+    if not batch:
+        raise HTTPException(409, "Calendar batch is missing")
+    if batch.status in {"succeeded", "failed"}:
+        return {"run_id": run.id, "status": run.status.value, "idempotent": True}
+    now = datetime.now(timezone.utc)
+    if payload.status != "succeeded":
+        batch.status = "failed"
+        batch.error = payload.error or payload.status
+        batch.finished_at = now
+        run.status = RunStatus.failed
+        run.error = batch.error
+        run.finished_at = now
+        run.summary = {**(run.summary or {}), "phase": "completed"}
+        listing.last_error = batch.error
+        db.commit()
+        return {"run_id": run.id, "status": run.status.value}
+
+    ordered = sorted(payload.calendar_days, key=lambda item: item.stay_date)
+    if any(
+        right.stay_date != left.stay_date + timedelta(days=1)
+        for left, right in zip(ordered, ordered[1:])
+    ):
+        raise HTTPException(422, "Calendar callback must contain a continuous range")
+    requested = {date.fromisoformat(item) for item in run.summary["requested_dates"]}
+    returned = {item.stay_date for item in ordered}
+    if not requested.issubset(returned):
+        raise HTTPException(422, "Calendar does not cover every requested date")
+
+    calendar = {
+        item.stay_date: (item.bookable, item.min_nights) for item in ordered
+    }
+    observations = [
+        CompetitorObservation(
+            competitor_listing_id=listing.id,
+            scrape_run_id=run.id,
+            stay_date=item.stay_date,
+            price=None,
+            bookable=item.bookable,
+            minimum_stay=item.min_nights,
+            currency="IDR",
+            scraped_at=payload.scraped_at,
+            parser_version=payload.parser_version,
+            price_method="pending" if item.bookable else "unavailable",
+            collection_mode=collection_mode_for_date(item.stay_date),
+        )
+        for item in ordered
+    ]
+    db.add_all(observations)
+    batch.status = "succeeded"
+    batch.finished_at = now
+    batches = create_quote_plan(db, run, listing, calendar)
+    business_today = datetime.now(get_settings().timezone).date()
+    future_days = [
+        item for item in ordered if item.stay_date >= business_today
+    ]
+    if future_days:
+        listing.current_minimum_stay = next(
+            (
+                item.min_nights
+                for item in future_days
+                if item.bookable and item.min_nights is not None
+            ),
+            None,
+        )
+    run.summary = {
+        **(run.summary or {}),
+        "phase": "quotes" if batches else "calculating",
+        "calendar_day_count": len(ordered),
+        "price_target_count": len(requested),
+        "quote_batch_count": len(batches),
+    }
+    db.commit()
+    if not batches:
+        finalize_run(db, run, listing)
+    else:
+        try:
+            invoke_quote_batches(batches, run, listing)
+            for item in batches:
+                item.status = "running"
+            db.commit()
+        except Exception as exc:
+            for item in batches:
+                if item.status == "queued":
+                    item.status = "failed"
+                    item.error = str(exc)
+                    item.finished_at = now
+            db.commit()
+            finalize_run(db, run, listing)
+    return {"run_id": run.id, "status": run.status.value}
+
+
+@router.post(
+    "/internal/competitor-quotes",
+    dependencies=[Depends(require_competitor_callback)],
+)
+def receive_competitor_quotes(
+    payload: CompetitorQuoteBatchCallback,
+    db: Session = Depends(get_database_session),
+):
+    """Atomically persist one quote batch and finalize when all batches finish."""
+
+    run, listing = _competitor_run_listing(
+        db, payload.run_id, payload.external_listing_id
+    )
+    batch = db.get(CompetitorScrapeBatch, payload.batch_id)
+    if not batch or batch.scrape_run_id != run.id or batch.operation != "quotes":
+        raise HTTPException(409, "Quote batch does not match its run")
+    if batch.status in {"succeeded", "partially_succeeded", "failed"}:
+        return {"run_id": run.id, "status": run.status.value, "idempotent": True}
+    expected = set(batch.expected_quote_ids or [])
+    received = {item.quote_id for item in payload.quotes}
+    errors = {item.quote_id for item in payload.quote_errors}
+    if received | errors != expected:
+        raise HTTPException(422, "Callback must classify every expected quote ID")
+    for item in payload.quotes:
+        if item.currency.upper() != "IDR" or item.adults != get_settings().competitor_quote_adults:
+            raise HTTPException(422, "Quote currency or guest count is invalid")
+        if item.quote_id != quote_identity(
+            run.id, listing.id, item.check_in_date, item.check_out_date
+        ):
+            raise HTTPException(422, "Quote identity does not match its interval")
+    db.add_all(
+        [
+            CompetitorStayQuote(
+                scrape_run_id=run.id,
+                competitor_listing_id=listing.id,
+                quote_id=item.quote_id,
+                check_in_date=item.check_in_date,
+                check_out_date=item.check_out_date,
+                adults=item.adults,
+                currency=item.currency.upper(),
+                total_price=item.total_price,
+                scraped_at=item.scraped_at,
+                parser_version=item.parser_version,
+                raw=item.raw,
+            )
+            for item in payload.quotes
+        ]
+    )
+    batch.status = payload.status
+    batch.error = payload.error or (
+        f"{len(payload.quote_errors)} quote(s) failed"
+        if payload.quote_errors
+        else None
+    )
+    batch.finished_at = datetime.now(timezone.utc)
+    db.commit()
+    finalize_run(db, run, listing)
+    return {"run_id": run.id, "status": run.status.value}
+
+
 @router.post(
     "/internal/competitor-observations",
     dependencies=[Depends(require_competitor_callback)],
 )
-def receive_competitor_observations(
-    payload: CompetitorScrapeCallback,
+def receive_competitor_callback(
+    payload: CompetitorCalendarCallback | CompetitorQuoteBatchCallback,
     db: Session = Depends(get_database_session),
 ):
-    """Atomically persist an authenticated asynchronous collector result."""
+    """Dispatch the existing unified callback URL by operation."""
 
-    run = db.get(Run, payload.run_id)
-    if not run or run.kind != RunKind.scrape:
-        raise HTTPException(404, "Competitor scrape run not found")
-    summary = run.summary or {}
-    listing = db.get(CompetitorListing, summary.get("competitor_listing_id"))
-    if not listing or listing.external_listing_id != payload.external_listing_id:
-        raise HTTPException(409, "Callback listing does not match its run")
-    if (
-        summary.get("start_date") != payload.start_date.isoformat()
-        or summary.get("end_date") != payload.end_date.isoformat()
-    ):
-        raise HTTPException(409, "Callback range does not match its run")
-    if run.status != RunStatus.running:
-        return {"run_id": run.id, "status": run.status.value, "idempotent": True}
-    expected_dates = set(summary.get("requested_dates", []))
-    received_dates = {item.stay_date.isoformat() for item in payload.observations}
-    error_dates = {item.stay_date.isoformat() for item in payload.date_errors}
-    if payload.status in {"succeeded", "partially_succeeded"} and (
-        received_dates | error_dates
-    ) != expected_dates:
-        raise HTTPException(
-            422,
-            "Callback must classify every requested date exactly once",
-        )
-    now = datetime.now(timezone.utc)
-    if payload.status in {"failed", "source_not_configured"}:
-        run.status = RunStatus.failed
-        run.error = payload.error or payload.status
-        run.finished_at = now
-        run.summary = {
-            **summary,
-            "phase": "completed",
-            "result_status": payload.status,
-        }
-        listing.last_error = run.error
-        db.commit()
-        return {"run_id": run.id, "status": run.status.value}
-    observations = []
-    quotes_by_observation: list[tuple[CompetitorObservation, list]] = []
-    try:
-        for item in payload.observations:
-            normalized_price, price_method = normalize_competitor_price(item)
-            observation = CompetitorObservation(
-                competitor_listing_id=listing.id,
-                scrape_run_id=run.id,
-                stay_date=item.stay_date,
-                price=normalized_price,
-                available=item.available,
-                available_for_checkin=item.available_for_checkin,
-                minimum_stay=item.min_nights,
-                currency=item.currency.upper(),
-                scraped_at=item.scraped_at,
-                parser_version=item.parser_version,
-                price_method=price_method,
-            )
-            observations.append(observation)
-            quotes_by_observation.append((observation, item.stay_quotes))
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    db.add_all(observations)
-    db.flush()
-    db.add_all(
-        [
-            CompetitorStayQuote(
-                competitor_observation_id=observation.id,
-                check_out_date=quote.check_out_date,
-                stay_nights=quote.stay_nights,
-                total_price=quote.total_price,
-                accommodation_subtotal=quote.accommodation_subtotal,
-                cleaning_fee=quote.cleaning_fee,
-                taxes=quote.taxes,
-                other_excluded_fees=quote.other_excluded_fees,
-                raw=quote.raw,
-            )
-            for observation, quotes in quotes_by_observation
-            for quote in quotes
-        ]
-    )
-    db.add_all(
-        [
-            CompetitorDateError(
-                scrape_run_id=run.id,
-                competitor_listing_id=listing.id,
-                stay_date=item.stay_date,
-                code=item.code,
-                message=item.message,
-            )
-            for item in payload.date_errors
-        ]
-    )
-    checkin_observations = sorted(
-        (
-            item
-            for item in payload.observations
-            if (
-                item.stay_date >= date.today()
-                and item.available_for_checkin
-                and item.min_nights is not None
-            )
-        ),
-        key=lambda item: item.stay_date,
-    )
-    if checkin_observations:
-        listing.current_minimum_stay = checkin_observations[0].min_nights
-    listing.last_scraped_at = max(item.scraped_at for item in payload.observations)
-    date_error_count = len(payload.date_errors)
-    listing.last_error = (
-        f"{date_error_count} date(s) failed" if date_error_count else None
-    )
-    run.status = (
-        RunStatus.partially_succeeded
-        if date_error_count
-        else RunStatus.succeeded
-    )
-    run.error = listing.last_error
-    run.finished_at = now
-    run.summary = {
-        **summary,
-        "phase": "completed",
-        "result_status": run.status.value,
-        "observation_count": len(observations),
-        "date_error_count": date_error_count,
-    }
-    db.commit()
-    return {"run_id": run.id, "status": run.status.value}
+    if isinstance(payload, CompetitorCalendarCallback):
+        return receive_competitor_calendar(payload, db)
+    return receive_competitor_quotes(payload, db)
 
 
 @router.get("/integrations/hostex", dependencies=[Depends(require_session)])

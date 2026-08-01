@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.competitor_scrapes import start_collection_run
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
@@ -127,10 +129,18 @@ def pricing_configuration(
     )
 
 
+@dataclass(frozen=True)
+class CompetitorMarketObservation:
+    """Combine latest availability with the latest successful dated price."""
+
+    bookable: bool
+    price: object | None
+
+
 def latest_competitor_observations(
     db: Session, pricing_group: PricingGroup, start: date, horizon_end: date
-) -> dict[date, dict[str, CompetitorObservation]]:
-    """Group latest observations by stay date and normalized competitor URL."""
+) -> dict[date, dict[str, CompetitorMarketObservation]]:
+    """Merge latest calendar availability and latest successful prices."""
 
     if not pricing_group.competitor_urls:
         return {}
@@ -145,10 +155,21 @@ def latest_competitor_observations(
         )
         .order_by(CompetitorObservation.scraped_at.desc())
     ).all()
-    latest: dict[date, dict[str, CompetitorObservation]] = {}
+    latest_calendar: dict[tuple[date, str], CompetitorObservation] = {}
+    latest_price: dict[tuple[date, str], object] = {}
     for observation in observations:
-        latest.setdefault(observation.stay_date, {}).setdefault(
-            observation.competitor_listing.canonical_url, observation
+        key = (
+            observation.stay_date,
+            observation.competitor_listing.canonical_url,
+        )
+        latest_calendar.setdefault(key, observation)
+        if observation.price is not None:
+            latest_price.setdefault(key, observation.price)
+    latest: dict[date, dict[str, CompetitorMarketObservation]] = {}
+    for (stay_date, url), observation in latest_calendar.items():
+        latest.setdefault(stay_date, {})[url] = CompetitorMarketObservation(
+            bookable=observation.bookable,
+            price=latest_price.get((stay_date, url)),
         )
     return latest
 
@@ -192,7 +213,7 @@ def generate_price_recommendations(
             available_prices = [
                 float(observation.price)
                 for observation in by_url.values()
-                if observation.available and observation.price is not None
+                if observation.bookable and observation.price is not None
             ]
             if (
                 configuration["base_price_mode"] == "market_median"
@@ -210,7 +231,7 @@ def generate_price_recommendations(
                 current_date=today,
                 available_competitor_prices=available_prices,
                 unavailable_competitor_count=sum(
-                    not observation.available for observation in by_url.values()
+                    not observation.bookable for observation in by_url.values()
                 ),
                 all_tracked_competitor_count=len(
                     prop.pricing_group.competitor_urls
@@ -354,3 +375,52 @@ def daily_hostex_import():
                 await client.close()
 
         run.summary = asyncio.run(execute())
+
+
+def scheduled_competitor_collection(collection_mode: str) -> dict[str, int]:
+    """Queue mode-specific competitor runs for every configured listing."""
+
+    settings = get_settings()
+    result = {"started": 0, "skipped": 0, "failed": 0}
+    if not settings.competitor_scrape_lambda_name:
+        return result
+    today = datetime.now(settings.timezone).date()
+    if collection_mode == "precise":
+        start_date = today
+        end_date = today + timedelta(days=settings.competitor_precise_horizon_days)
+    elif collection_mode == "rough":
+        start_date = today + timedelta(
+            days=settings.competitor_precise_horizon_days + 1
+        )
+        end_date = today + timedelta(days=364)
+    else:
+        raise ValueError(f"Unknown competitor collection mode: {collection_mode}")
+    with SessionLocal() as db:
+        listings = list(db.scalars(select(CompetitorListing)))
+        for listing in listings:
+            try:
+                run = start_collection_run(
+                    db,
+                    listing,
+                    start_date,
+                    end_date,
+                    collection_mode=collection_mode,
+                )
+                key = "skipped" if run.status == RunStatus.skipped else "started"
+                result[key] += 1
+            except Exception:
+                db.rollback()
+                result["failed"] += 1
+    return result
+
+
+def daily_competitor_collection() -> dict[str, int]:
+    """Queue daily calendar and precise-price collection runs."""
+
+    return scheduled_competitor_collection("precise")
+
+
+def monthly_competitor_collection() -> dict[str, int]:
+    """Queue monthly rough-price collection runs."""
+
+    return scheduled_competitor_collection("rough")

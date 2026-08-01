@@ -24,7 +24,7 @@ export default async function Competitors() {
     : [];
   return <Shell>
     <h1>Competitor collection</h1>
-    <p className="muted">Run a granular calendar collection manually. Dates successfully collected during the last 24 hours are skipped unless force refresh is enabled.</p>
+    <p className="muted">Calendar collection runs first, followed by backend-planned quote batches. Precise prices are fresh for 24 hours; rough prices refresh monthly.</p>
     <CompetitorScrapePanel competitors={competitors} initialRuns={runs}/>
   </Shell>;
 }

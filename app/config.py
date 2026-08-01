@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     competitor_scrape_lambda_name: str = ""
     competitor_scrape_max_days: int = 30
     competitor_observation_fresh_hours: int = 24
+    competitor_rough_fresh_days: int = 31
+    competitor_precise_horizon_days: int = 60
+    competitor_quote_batch_size: int = 8
+    competitor_quote_adults: int = 4
     competitor_callback_token: str = ""
     aws_region: str = "us-east-1"
 
