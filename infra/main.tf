@@ -110,6 +110,7 @@ resource "aws_s3_bucket_versioning" "backups" {
 resource "aws_s3_bucket_server_side_encryption_configuration" "backups" {
   bucket = aws_s3_bucket.backups.id
   rule {
+    blocked_encryption_types = ["SSE-C"]
     apply_server_side_encryption_by_default {
       kms_master_key_id = aws_kms_key.backups.arn
       sse_algorithm     = "aws:kms"
@@ -333,7 +334,10 @@ resource "aws_lambda_function" "competitor_collector" {
   memory_size   = 256
   timeout       = var.competitor_lambda_timeout
 
-  reserved_concurrent_executions = 1
+  # New AWS accounts can have a concurrency quota of only 10 and AWS requires
+  # all 10 to remain unreserved. Use -1 until the account quota is increased;
+  # backend run locks still prevent overlapping work for a listing/range.
+  reserved_concurrent_executions = var.competitor_lambda_reserved_concurrency
 
   environment {
     variables = {

@@ -63,8 +63,8 @@ calendar is never returned. Unavailable days are still returned.
 }
 ```
 
-The batch is validated (checkout after check-in, unique IDs, size at most
-`AIRBNB_QUOTE_BATCH_LIMIT`, default 8) and each quote is fetched with its own
+The batch is validated (checkout after check-in, unique IDs, size at most the
+collector safety ceiling of 8) and each quote is fetched with its own
 `GET /api/v3/stayCheckout/{sha}` request, strictly sequentially, with a fresh
 session per request. Production guest counts are always `4 adults / 0 children /
 0 infants / 0 pets` with `guestCurrencyOverride=IDR`; `productId` is

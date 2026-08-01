@@ -51,3 +51,14 @@ variable "competitor_lambda_timeout" {
   type        = number
   default     = 60
 }
+
+variable "competitor_lambda_reserved_concurrency" {
+  description = "Reserved Lambda concurrency; use -1 when the account quota cannot reserve one execution"
+  type        = number
+  default     = -1
+
+  validation {
+    condition     = var.competitor_lambda_reserved_concurrency == -1 || var.competitor_lambda_reserved_concurrency == 1
+    error_message = "Reserved concurrency must be -1 (unreserved) or 1 (serialized)."
+  }
+}

@@ -20,8 +20,8 @@ consecutive quote requests.
   `api_key`, `client_version`, `calendar_sha`, `checkout_sha`, optional
   `calendar_path` / `checkout_path`, and `collector_paused` (kill switch).
   An empty object `{}` uses the fixture defaults baked into the image.
-- Optional tuning env vars (defaults in parentheses): `AIRBNB_QUOTE_BATCH_LIMIT`
-  (8), `AIRBNB_REQUEST_TIMEOUT` (8), `AIRBNB_DEADLINE_BUDGET` (50),
+- Optional tuning env vars (defaults in parentheses): `AIRBNB_REQUEST_TIMEOUT`
+  (8), `AIRBNB_DEADLINE_BUDGET` (50),
   `AIRBNB_SLEEP_MIN` (1.8), `AIRBNB_SLEEP_MAX` (3.8).
 
 ## Local development

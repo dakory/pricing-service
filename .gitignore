@@ -12,3 +12,4 @@ dashboard/*.tsbuildinfo
 infra/.terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan

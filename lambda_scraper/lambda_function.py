@@ -44,7 +44,9 @@ PARSER_CALENDAR = "airbnb-calendar-v1"
 PARSER_CHECKOUT = "airbnb-checkout-v1"
 QUOTE_ADULTS = 4
 
-QUOTE_BATCH_LIMIT = int(os.environ.get("AIRBNB_QUOTE_BATCH_LIMIT", "8"))
+# Safety ceiling for backend-created batches. The backend may choose any lower
+# size, so normal batch tuning has a single configuration source.
+QUOTE_BATCH_LIMIT = 8
 REQUEST_TIMEOUT = float(os.environ.get("AIRBNB_REQUEST_TIMEOUT", "8"))
 DEADLINE_BUDGET = float(os.environ.get("AIRBNB_DEADLINE_BUDGET", "50"))
 SLEEP_MIN = float(os.environ.get("AIRBNB_SLEEP_MIN", "1.8"))

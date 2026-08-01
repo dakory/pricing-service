@@ -7,6 +7,13 @@ dnf install -y docker awscli git
 systemctl enable --now docker
 usermod -aG docker ec2-user
 
+# Amazon Linux does not currently package the Docker Compose CLI plugin.
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -fsSL \
+  https://github.com/docker/compose/releases/download/v2.39.1/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod 755 /usr/local/lib/docker/cli-plugins/docker-compose
+
 # A 3 GiB swap file keeps short browser/build peaks from killing PostgreSQL.
 if [ ! -f /swapfile ]; then
   dd if=/dev/zero of=/swapfile bs=1M count=3072

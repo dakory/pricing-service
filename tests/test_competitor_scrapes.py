@@ -7,8 +7,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import api
+from app import competitor_scrapes
 from app.competitor_scrapes import (
     ensure_no_overlapping_run,
+    invoke_calendar,
     pending_dates,
     validate_scrape_range,
 )
@@ -26,6 +28,9 @@ from app.models import (
     RunKind,
     RunStatus,
 )
+from lambda_scraper import lambda_function
+
+from tests.test_lambda_scraper import load_fixture
 
 
 def database():
@@ -267,6 +272,110 @@ def test_two_stage_callbacks_persist_calendar_quotes_and_price(monkeypatch):
             assert observation.price == Decimal("1000000")
             assert observation.price_method == "quote_difference_left"
             assert session.query(CompetitorStayQuote).count() == 2
+            assert session.get(Run, run_id).status == RunStatus.succeeded
+    finally:
+        settings.competitor_callback_token = old_token
+        app.dependency_overrides.clear()
+
+
+def test_backend_events_lambda_callbacks_and_database_form_one_contract(monkeypatch):
+    """Exercise backend-generated IDs through Lambda fixtures and API callbacks."""
+
+    Session = database()
+    with Session() as session:
+        listing = competitor(session)
+        run = Run(
+            kind=RunKind.scrape,
+            status=RunStatus.running,
+            summary={
+                "phase": "calendar",
+                "competitor_listing_id": listing.id,
+                "external_listing_id": listing.external_listing_id,
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-03",
+                "requested_dates": ["2026-08-03"],
+                "skipped_dates": [],
+                "collection_mode": "precise",
+            },
+        )
+        session.add(run)
+        session.flush()
+        session.add(
+            CompetitorScrapeBatch(
+                scrape_run_id=run.id,
+                competitor_listing_id=listing.id,
+                operation="calendar",
+                status="running",
+                expected_quote_ids=[],
+            )
+        )
+        session.commit()
+        run_id = run.id
+
+        invoked_events = []
+        monkeypatch.setattr(
+            competitor_scrapes, "invoke_lambda", invoked_events.append
+        )
+        invoke_calendar(run, listing)
+
+    def override_session():
+        with Session() as session:
+            yield session
+
+    app.dependency_overrides[get_database_session] = override_session
+    settings = get_settings()
+    old_token = settings.competitor_callback_token
+    settings.competitor_callback_token = "callback-secret"
+    client = TestClient(app)
+
+    def deliver_callback(payload):
+        response = client.post(
+            "/api/internal/competitor-observations",
+            json=payload,
+            headers={"Authorization": "Bearer callback-secret"},
+        )
+        assert response.status_code == 200, response.text
+
+    calendar_response = load_fixture("availability_calendar.json")
+    calendar_response["data"]["merlin"]["pdpAvailabilityCalendar"][
+        "calendarMonths"
+    ] = calendar_response["data"]["merlin"]["pdpAvailabilityCalendar"][
+        "calendarMonths"
+    ][1:]
+    checkout_response = load_fixture("stay_checkout.json")
+
+    def fetch_source(_url, params, _headers, timeout=10):
+        del timeout
+        return (
+            (200, calendar_response, {})
+            if "request" in params["variables"]
+            else (200, checkout_response, {})
+        )
+
+    monkeypatch.setattr(lambda_function, "_fetch_json", fetch_source)
+    monkeypatch.setattr(lambda_function, "send_result", deliver_callback)
+    monkeypatch.setattr(lambda_function.time, "sleep", lambda *_: None)
+
+    try:
+        calendar_event = invoked_events.pop()
+        assert calendar_event["operation"] == "calendar"
+        lambda_function.lambda_handler(calendar_event, None)
+
+        quote_event = invoked_events.pop()
+        assert quote_event["operation"] == "quotes"
+        assert quote_event["quotes"][0]["quote_id"].startswith("q_")
+        lambda_function.lambda_handler(quote_event, None)
+
+        with Session() as session:
+            observation = session.scalar(
+                session.query(CompetitorObservation).filter_by(
+                    scrape_run_id=run_id,
+                    stay_date=date(2026, 8, 3),
+                ).statement
+            )
+            assert observation.price == Decimal("1700400")
+            assert observation.price_method == "single_night"
+            assert session.query(CompetitorStayQuote).count() == 1
             assert session.get(Run, run_id).status == RunStatus.succeeded
     finally:
         settings.competitor_callback_token = old_token
