@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 *.db
 .pytest_cache/
+.lavish/
 dashboard/.next/
 dashboard/node_modules/
 dashboard/*.tsbuildinfo
