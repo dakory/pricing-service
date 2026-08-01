@@ -169,6 +169,19 @@ resource "aws_ssm_parameter" "competitor_callback_token" {
   }
 }
 
+resource "aws_ssm_parameter" "competitor_airbnb_config" {
+  name        = "/${var.app_name}/competitor-airbnb-config"
+  description = "JSON runtime config for the Airbnb frontend API: api_key, client_version, calendar_sha, checkout_sha, optional paths and collector_paused; empty object uses the fixture defaults baked into the Lambda image"
+  type        = "SecureString"
+  tier        = "Standard"
+  key_id      = aws_kms_key.backups.arn
+  value       = jsonencode({})
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 resource "aws_iam_role_policy" "application_data" {
   name = "${var.app_name}-application-data"
   role = aws_iam_role.ec2_role.id
@@ -293,9 +306,12 @@ resource "aws_iam_role_policy" "competitor_lambda" {
         Resource = "${aws_cloudwatch_log_group.competitor_lambda.arn}:*"
       },
       {
-        Effect   = "Allow"
-        Action   = ["ssm:GetParameter"]
-        Resource = aws_ssm_parameter.competitor_callback_token.arn
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          aws_ssm_parameter.competitor_callback_token.arn,
+          aws_ssm_parameter.competitor_airbnb_config.arn,
+        ]
       },
       {
         Effect   = "Allow"
@@ -323,6 +339,7 @@ resource "aws_lambda_function" "competitor_collector" {
     variables = {
       BACKEND_CALLBACK_URL             = var.competitor_callback_url != "" ? var.competitor_callback_url : "https://${var.domain}/api/internal/competitor-observations"
       BACKEND_CALLBACK_TOKEN_PARAMETER = aws_ssm_parameter.competitor_callback_token.name
+      AIRBNB_FRONTEND_CONFIG_PARAMETER = aws_ssm_parameter.competitor_airbnb_config.name
     }
   }
 
