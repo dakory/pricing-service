@@ -206,11 +206,22 @@ class HostexClient:
             # The live v3 envelope names this collection `data.listings`.
             return response_items(body, "listings")
 
-    async def publish_prices(self, listing_id: str, entries: list[dict]) -> PublishResult:
+    async def publish_prices(
+        self,
+        listing_id: str,
+        entries: list[dict],
+        channel_type: str = "booking_site",
+    ) -> PublishResult:
         """Submit a batch of daily prices for one channel listing."""
 
         body = await self._request(
-            "POST", "/v3/listings/prices", json={"listing_id": listing_id, "prices": entries}
+            "POST",
+            "/v3/listings/prices",
+            json={
+                "listing_id": listing_id,
+                "channel_type": channel_type,
+                "prices": entries,
+            },
         )
         return PublishResult(accepted=len(entries), response=body)
 

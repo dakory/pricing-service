@@ -708,13 +708,42 @@ def receive_competitor_callback(
 
 @router.get("/integrations/hostex", dependencies=[Depends(require_session)])
 def hostex_status(db: Session = Depends(get_database_session)):
-    """Return non-sensitive Hostex configuration and import status."""
+    """Return Hostex import timestamps, last attempt, and daily schedule."""
 
     settings = get_settings()
-    last_run = db.scalar(select(Run).where(Run.kind == RunKind.import_).order_by(Run.started_at.desc()).limit(1))
+    now = datetime.now(timezone.utc)
+    local_now = now.astimezone(settings.timezone)
+    next_import = local_now.replace(hour=4, minute=0, second=0, microsecond=0)
+    if next_import <= local_now:
+        next_import += timedelta(days=1)
+    last_run = db.scalar(
+        select(Run)
+        .where(Run.kind == RunKind.import_)
+        .order_by(Run.started_at.desc())
+        .limit(1)
+    )
+    last_success = db.scalar(
+        select(Run)
+        .where(
+            Run.kind == RunKind.import_,
+            Run.status == RunStatus.succeeded,
+        )
+        .order_by(Run.finished_at.desc())
+        .limit(1)
+    )
+    successful_at = last_success.finished_at if last_success else None
+    if successful_at is not None and successful_at.tzinfo is None:
+        successful_at = successful_at.replace(tzinfo=timezone.utc)
     return {
         "configured": bool(settings.hostex_access_token),
         "mode": "read_only",
+        "last_successful_import_at": successful_at,
+        "schedule": {
+            "enabled": True,
+            "description": "Daily at 04:00 WITA",
+            "timezone": settings.business_timezone,
+            "next_import_at": next_import,
+        },
         "last_import": None
         if not last_run
         else {
@@ -792,29 +821,16 @@ async def run_hostex_import(db: Session = Depends(get_database_session)):
     settings = get_settings()
     if not settings.hostex_access_token:
         raise HTTPException(409, "HOSTEX_ACCESS_TOKEN is not configured")
-    running = db.scalar(
-        select(Run).where(Run.kind == RunKind.import_, Run.status == RunStatus.running).limit(1)
-    )
-    if running:
-        raise HTTPException(409, "A Hostex import is already running")
-    run = Run(kind=RunKind.import_, status=RunStatus.running)
-    db.add(run)
-    db.commit()
     client = HostexClient(settings.hostex_access_token, settings.hostex_base_url)
     try:
-        summary = await import_hostex(db, client)
-        run.status = RunStatus.succeeded
-        run.summary = summary
-        run.finished_at = datetime.now(timezone.utc)
-        db.commit()
-        return {"run_id": run.id, "status": run.status.value, "summary": summary}
+        with serialized_run(db, RunKind.import_) as run:
+            if run is None:
+                raise HTTPException(409, "Another serialized job is running")
+            summary = await import_hostex(db, client)
+            run.summary = summary
+            run_id = run.id
+        return {"run_id": run_id, "status": "succeeded", "summary": summary}
     except HostexError as exc:
-        db.rollback()
-        run = db.get(Run, run.id)
-        run.status = RunStatus.failed
-        run.error = str(exc)
-        run.finished_at = datetime.now(timezone.utc)
-        db.commit()
         raise HTTPException(502, "Hostex import failed; see run history") from exc
     finally:
         await client.close()

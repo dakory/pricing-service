@@ -339,7 +339,8 @@ async def publish_recommendations(db: Session) -> int:
                 batch = rows[batch_start : batch_start + 100]
                 entries = [
                     {
-                        "date": row.stay_date.isoformat(),
+                        "start_date": row.stay_date.isoformat(),
+                        "end_date": row.stay_date.isoformat(),
                         "price": int(row.recommended_price),
                     }
                     for row in batch

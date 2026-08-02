@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -11,9 +11,19 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
+from app.api import hostex_status
+from app.config import get_settings
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_hostex
-from app.models import HostexCalendarDay, HostexListing, Property, Reservation
+from app.models import (
+    HostexCalendarDay,
+    HostexListing,
+    Property,
+    Reservation,
+    Run,
+    RunKind,
+    RunStatus,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "hostex"
 
@@ -166,3 +176,76 @@ def test_pricing_ratios_support_live_data_channels_envelope():
         await http.aclose()
 
     asyncio.run(run())
+
+
+def test_publish_prices_sends_booking_site_channel_and_date_ranges():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v3/listings/prices"
+        assert json.loads(request.content) == {
+            "listing_id": "direct-101",
+            "channel_type": "booking_site",
+            "prices": [
+                {
+                    "start_date": "2026-08-15",
+                    "end_date": "2026-08-15",
+                    "price": 1558625,
+                }
+            ],
+        }
+        return httpx.Response(200, json={"error_code": 200})
+
+    async def run():
+        http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="https://api.hostex.test",
+        )
+        client = HostexClient("token", client=http)
+        result = await client.publish_prices(
+            "direct-101",
+            [
+                {
+                    "start_date": "2026-08-15",
+                    "end_date": "2026-08-15",
+                    "price": 1558625,
+                }
+            ],
+        )
+        assert result.accepted == 1
+        await http.aclose()
+
+    asyncio.run(run())
+
+
+def test_hostex_status_reports_last_success_and_schedule():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    now = datetime.now(timezone.utc)
+    with sessionmaker(engine, expire_on_commit=False)() as db:
+        successful = Run(
+            kind=RunKind.import_,
+            status=RunStatus.succeeded,
+            started_at=now - timedelta(hours=3),
+            finished_at=now - timedelta(hours=2),
+            summary={"calendar": {"received": 100}},
+        )
+        failed = Run(
+            kind=RunKind.import_,
+            status=RunStatus.failed,
+            started_at=now - timedelta(hours=1),
+            finished_at=now - timedelta(minutes=50),
+            error="upstream failed",
+        )
+        db.add_all([successful, failed])
+        db.commit()
+
+        result = hostex_status(db)
+
+        assert result["last_successful_import_at"] == successful.finished_at.replace(
+            tzinfo=timezone.utc
+        )
+        assert result["last_import"]["id"] == failed.id
+        assert result["schedule"]["enabled"] is True
+        assert result["schedule"]["description"] == "Daily at 04:00 WITA"
+        assert result["schedule"]["next_import_at"] > datetime.now(
+            get_settings().timezone
+        )

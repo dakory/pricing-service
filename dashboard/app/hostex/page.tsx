@@ -2,12 +2,14 @@ import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Shell } from "../components/Shell";
+import { HostexImportPanel } from "../components/HostexImportPanel";
 
 type Listing = {
   id: number; property_name: string | null; listing_id: string; channel_type: string;
   readonly: boolean; imported_at: string;
 };
 type Night = { date: string; price: number | null; inventory: number | null; minimum_stay: number | null; imported_at: string };
+type HostexStatus = Parameters<typeof HostexImportPanel>[0]["status"];
 
 async function api(path: string) {
   const cookie = await cookies();
@@ -27,7 +29,10 @@ export default async function HostexCalendars({
   searchParams: Promise<{ listing?: string; channel?: string; start?: string; end?: string }>;
 }) {
   const params = await searchParams;
-  const listings: Listing[] = await api("/api/hostex/listings");
+  const [listings, hostexStatus]: [Listing[], HostexStatus] = await Promise.all([
+    api("/api/hostex/listings"),
+    api("/api/integrations/hostex"),
+  ]);
   const selected = listings.find(item => item.listing_id === params.listing && item.channel_type === params.channel) ?? listings[0];
   const today = new Date().toISOString().slice(0, 10);
   const endDefault = new Date(Date.now() + 31 * 86400000).toISOString().slice(0, 10);
@@ -38,6 +43,7 @@ export default async function HostexCalendars({
   return <Shell>
     <h1>Hostex calendars</h1>
     <p className="muted">Read-only prices and availability from the latest Hostex import.</p>
+    <HostexImportPanel status={hostexStatus}/>
     <div className="hostex-layout">
       <div className="card listing-list">
         <b>Imported listings ({listings.length})</b>
