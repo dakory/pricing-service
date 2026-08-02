@@ -6,6 +6,7 @@ All network behavior is exercised through a fake transport (monkeypatched
 
 import json
 import logging
+from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
 
@@ -375,6 +376,31 @@ def test_429_retry_after_is_honored(monkeypatch):
     assert result == {"operation": "quotes", "status": "succeeded"}
     assert len(calls) == 2  # initial 429 then successful retry
     assert sent[0]["quotes"][0]["total_price"] == "1700400"
+
+
+def test_http_200_checkout_rejection_is_retried_once(monkeypatch):
+    sent = []
+    monkeypatch.setattr(lambda_function, "send_result", sent.append)
+    rejected = deepcopy(load_fixture("stay_checkout.json"))
+    breakdown = rejected["data"]["presentation"]["stayCheckout"]["sections"][
+        "temporaryQuickPayData"
+    ]["bootstrapPayments"]["productPriceBreakdown"]
+    breakdown["status"]["statusCode"] = "PRICE_FAILURE"
+    calls = stub_transport(
+        monkeypatch,
+        [
+            (200, rejected, {}),
+            (200, load_fixture("stay_checkout.json"), {}),
+        ],
+    )
+    event = quotes_event()
+    event["quotes"] = [event["quotes"][0]]
+
+    result = lambda_function.lambda_handler(event, None)
+
+    assert result == {"operation": "quotes", "status": "succeeded"}
+    assert len(calls) == 2
+    assert sent[0]["quote_errors"] == []
 
 
 def test_transient_5xx_is_retried_once(monkeypatch):

@@ -305,6 +305,10 @@ def plan_target(
     if minimum_stay == 1:
         return "single_night", [quote(stay_date, stay_date + timedelta(days=1))]
 
+    average_quote = quote(
+        stay_date, stay_date + timedelta(days=minimum_stay)
+    )
+
     if mode == "precise":
         left_start = stay_date - timedelta(days=minimum_stay)
         if _continuous_bookable(
@@ -313,18 +317,20 @@ def plan_target(
             return "quote_difference_left", [
                 quote(left_start, stay_date + timedelta(days=1)),
                 quote(left_start, stay_date),
+                average_quote,
             ]
         right_end = stay_date + timedelta(days=minimum_stay + 1)
         if _continuous_bookable(calendar, stay_date, right_end):
             return "quote_difference_right", [
                 quote(stay_date, right_end),
                 quote(stay_date + timedelta(days=1), right_end),
+                average_quote,
             ]
 
-    average_end = stay_date + timedelta(days=minimum_stay)
-    if _continuous_bookable(calendar, stay_date, average_end):
-        return "minimum_stay_average", [quote(stay_date, average_end)]
-    return "price_unavailable", []
+    # Calendar `bookable` describes whether a stay can start on that date; it
+    # is not a reliable paid-night availability flag. Let stayCheckout decide
+    # whether the target's minimum-stay interval can actually be quoted.
+    return "minimum_stay_average", [average_quote]
 
 
 def create_quote_plan(
@@ -409,31 +415,51 @@ def invoke_quote_batches(
 
 def calculate_target_price(
     target: CompetitorPriceTarget, quotes: dict[str, CompetitorStayQuote]
-) -> Decimal | None:
-    """Calculate one target from its persisted raw quote references."""
+) -> tuple[Decimal | None, str]:
+    """Calculate one target and return the method that actually succeeded."""
 
     if target.price_method == "unavailable":
-        return None
+        return None, "unavailable"
     if target.price_method == "price_unavailable":
         raise ValueError("No continuous minimum-stay interval is available")
-    try:
-        values = [quotes[quote_id].total_price for quote_id in target.quote_ids]
-    except KeyError as exc:
-        raise ValueError("A required quote is unavailable") from exc
     if target.price_method == "single_night":
-        return values[0]
+        try:
+            return quotes[target.quote_ids[0]].total_price, "single_night"
+        except KeyError as exc:
+            raise ValueError("The single-night quote is unavailable") from exc
     if target.price_method in {
         "quote_difference_left",
         "quote_difference_right",
     }:
-        result = values[0] - values[1]
-        if result <= 0:
-            raise ValueError("Quote difference must be positive")
-        return result
+        try:
+            result = (
+                quotes[target.quote_ids[0]].total_price
+                - quotes[target.quote_ids[1]].total_price
+            )
+        except KeyError:
+            result = None
+        if result is not None and result > 0:
+            return result, target.price_method
+        if len(target.quote_ids) < 3 or not target.minimum_stay:
+            raise ValueError("Quote difference and minimum-stay fallback are unavailable")
+        try:
+            fallback_total = quotes[target.quote_ids[2]].total_price
+        except KeyError as exc:
+            raise ValueError(
+                "Quote difference and minimum-stay fallback are unavailable"
+            ) from exc
+        return (
+            fallback_total / Decimal(target.minimum_stay),
+            "minimum_stay_average",
+        )
     if target.price_method == "minimum_stay_average":
         if not target.minimum_stay:
             raise ValueError("Average price requires minimum stay")
-        return values[0] / Decimal(target.minimum_stay)
+        try:
+            total = quotes[target.quote_ids[0]].total_price
+        except KeyError as exc:
+            raise ValueError("The minimum-stay quote is unavailable") from exc
+        return total / Decimal(target.minimum_stay), "minimum_stay_average"
     raise ValueError(f"Unknown price method: {target.price_method}")
 
 
@@ -475,8 +501,9 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
             errors += 1
             continue
         try:
-            observation.price = calculate_target_price(target, quotes)
-            observation.price_method = target.price_method
+            observation.price, actual_method = calculate_target_price(target, quotes)
+            observation.price_method = actual_method
+            target.price_method = actual_method
             observation.collection_mode = target.collection_mode
             target.status = "completed"
         except ValueError as exc:
@@ -484,15 +511,23 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
             target.error = str(exc)
             observation.price = None
             observation.price_method = "price_unavailable"
-            db.add(
-                CompetitorDateError(
-                    scrape_run_id=run.id,
-                    competitor_listing_id=listing.id,
-                    stay_date=target.stay_date,
-                    code="price_calculation_failed",
-                    message=str(exc),
+            existing_error = db.scalar(
+                select(CompetitorDateError).where(
+                    CompetitorDateError.scrape_run_id == run.id,
+                    CompetitorDateError.competitor_listing_id == listing.id,
+                    CompetitorDateError.stay_date == target.stay_date,
                 )
             )
+            if existing_error is None:
+                db.add(
+                    CompetitorDateError(
+                        scrape_run_id=run.id,
+                        competitor_listing_id=listing.id,
+                        stay_date=target.stay_date,
+                        code="price_calculation_failed",
+                        message=str(exc),
+                    )
+                )
             errors += 1
     now = datetime.now(timezone.utc)
     listing.last_scraped_at = now

@@ -25,10 +25,19 @@ def serialized_run(db: Session, kind: RunKind):
     """Record a job and prevent concurrent heavy work across worker processes."""
 
     postgres = db.bind.dialect.name == "postgresql"
+    lock_connection = None
     acquired = True
     if postgres:
-        acquired = db.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": JOB_LOCK})
+        # Session-level advisory locks belong to a physical connection. Keep a
+        # dedicated connection checked out for the whole job so commits made by
+        # the ORM session cannot return the lock owner to the connection pool.
+        lock_connection = db.bind.connect()
+        acquired = lock_connection.scalar(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": JOB_LOCK}
+        )
     if not acquired:
+        if lock_connection is not None:
+            lock_connection.close()
         yield None
         return
     run = Run(kind=kind, status=RunStatus.running)
@@ -50,9 +59,14 @@ def serialized_run(db: Session, kind: RunKind):
         db.commit()
         raise
     finally:
-        if postgres:
-            db.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": JOB_LOCK})
-            db.commit()
+        if lock_connection is not None:
+            try:
+                lock_connection.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), {"key": JOB_LOCK}
+                )
+                lock_connection.commit()
+            finally:
+                lock_connection.close()
 
 
 def active_override(db: Session, property_id: int, stay_date: date) -> Override | None:

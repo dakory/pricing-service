@@ -8,7 +8,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth import clear_session, create_session, require_csrf, require_session, verify_admin
+from app.auth import (
+    clear_session,
+    create_session,
+    require_csrf,
+    require_session,
+    verify_admin,
+)
 from app.config import get_settings
 from app.competitor_scrapes import (
     collection_mode_for_date,
@@ -24,10 +30,40 @@ from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_hostex
 from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
-from app.models import AdminSession, CompetitorListing, CompetitorObservation, CompetitorScrapeBatch, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Run, Setting
-from app.models import RunKind, RunStatus
+from app.models import (
+    AdminSession,
+    CompetitorDateError,
+    CompetitorListing,
+    CompetitorObservation,
+    CompetitorPriceTarget,
+    CompetitorScrapeBatch,
+    CompetitorStayQuote,
+    HostexCalendarDay,
+    HostexListing,
+    Override,
+    PricingGroup,
+    Property,
+    Recommendation,
+    Run,
+    RunKind,
+    RunStatus,
+    Setting,
+)
 from app.pricing import merge_pricing_configuration
-from app.schemas import CompetitorCalendarCallback, CompetitorQuoteBatchCallback, CompetitorScrapeCreate, ModeUpdate, OverrideCreate, PricingConfiguration, PricingConfigurationOverride, PricingGroupCreate, PricingGroupUpdate, PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas import (
+    CompetitorCalendarCallback,
+    CompetitorQuoteBatchCallback,
+    CompetitorScrapeCreate,
+    ModeUpdate,
+    OverrideCreate,
+    PricingConfiguration,
+    PricingConfigurationOverride,
+    PricingGroupCreate,
+    PricingGroupUpdate,
+    PropertyCreate,
+    PropertyRead,
+    PropertyUpdate,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -617,6 +653,32 @@ def receive_competitor_quotes(
             for item in payload.quotes
         ]
     )
+    targets = db.scalars(
+        select(CompetitorPriceTarget).where(
+            CompetitorPriceTarget.scrape_run_id == run.id
+        )
+    ).all()
+    for quote_error in payload.quote_errors:
+        for target in targets:
+            if quote_error.quote_id not in (target.quote_ids or []):
+                continue
+            existing = db.scalar(
+                select(CompetitorDateError).where(
+                    CompetitorDateError.scrape_run_id == run.id,
+                    CompetitorDateError.competitor_listing_id == listing.id,
+                    CompetitorDateError.stay_date == target.stay_date,
+                )
+            )
+            if existing is None:
+                db.add(
+                    CompetitorDateError(
+                        scrape_run_id=run.id,
+                        competitor_listing_id=listing.id,
+                        stay_date=target.stay_date,
+                        code=quote_error.code,
+                        message=quote_error.message,
+                    )
+                )
     batch.status = payload.status
     batch.error = payload.error or (
         f"{len(payload.quote_errors)} quote(s) failed"

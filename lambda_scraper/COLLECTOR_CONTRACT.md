@@ -106,6 +106,9 @@ is `OK`. The price is `priceBreakdown.total.total.amountMicros / 1_000_000`
 structure, non-OK status, wrong currency or a non-positive total are
 quote-scoped errors. Every input `quote_id` appears exactly once in `quotes` or
 `quote_errors`; an error on one quote never discards the batch's successes.
+Recognized non-OK checkout statuses returned inside HTTP 200 are retried once
+with jitter while the invocation deadline permits it. A persistent rejection
+uses code `checkout_rejected` and retains the upstream status in its message.
 
 ## Failure semantics
 
@@ -123,7 +126,8 @@ quote-scoped errors. Every input `quote_id` appears exactly once in `quotes` or
 - Every request uses a brand-new `curl_cffi` session with
   `impersonate="chrome120"`, closed immediately after use.
 - `sleep(uniform(1.8, 3.8))` between consecutive quote requests.
-- One retry only for transport / 429 / 5xx within the 50 s deadline budget;
+- One retry only for transport / 429 / 5xx or a recognized HTTP-200 checkout
+  rejection within the 50 s deadline budget;
   403 and structural problems are never retried.
 
 ## Runtime configuration

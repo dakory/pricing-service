@@ -87,6 +87,10 @@ class StructuralError(RuntimeError):
 class QuoteError(RuntimeError):
     """A checkout quote could not be produced (recoverable, quote-scoped)."""
 
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
 
 # ---------------------------------------------------------------------------
 # Configuration and callback delivery
@@ -462,7 +466,9 @@ def parse_checkout(payload: Any) -> tuple[str, str]:
     except (KeyError, TypeError) as exc:
         raise QuoteError("Unknown Airbnb checkout response structure") from exc
     if status_code != "OK":
-        raise QuoteError("Airbnb checkout did not return an OK status")
+        raise QuoteError(
+            f"Airbnb checkout status is {status_code}", retryable=True
+        )
     if currency != "IDR":
         raise QuoteError(f"Unexpected checkout currency: {currency}")
     try:
@@ -564,6 +570,30 @@ def _quote_error(quote_id: str, code: str, message: str) -> dict[str, str]:
     return {"quote_id": quote_id, "code": code, "message": message}
 
 
+def _parse_checkout_with_retry(
+    url: str,
+    params: dict[str, str],
+    headers: dict[str, str],
+    deadline: float,
+    initial_body: Any,
+) -> tuple[str, str]:
+    """Retry one recognized HTTP-200 checkout rejection with jitter."""
+
+    try:
+        return parse_checkout(initial_body)
+    except QuoteError as exc:
+        if not exc.retryable:
+            raise
+        delay = random.uniform(0.5, 1.5)
+        if time.monotonic() + delay >= deadline:
+            raise
+        time.sleep(delay)
+        status, body = _get_with_retry(url, params, headers, deadline)
+        if status != 200 or body is None:
+            raise UpstreamError(status=status)
+        return parse_checkout(body)
+
+
 def run_quotes(event: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     """Collect one batch of stay quotes, strictly sequentially."""
 
@@ -641,7 +671,9 @@ def run_quotes(event: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
                         )
                     break
                 continue
-            total_price, currency = parse_checkout(body)
+            total_price, currency = _parse_checkout_with_retry(
+                url, params, headers, deadline, body
+            )
             quotes.append(
                 {
                     "quote_id": quote_id,
@@ -672,7 +704,7 @@ def run_quotes(event: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
                 break
         except QuoteError as exc:
             consecutive_403 = 0
-            errors.append(_quote_error(quote_id, "quote_request_failed", str(exc)))
+            errors.append(_quote_error(quote_id, "checkout_rejected", str(exc)))
         except ValueError as exc:
             consecutive_403 = 0
             errors.append(_quote_error(quote_id, "quote_request_failed", str(exc)))

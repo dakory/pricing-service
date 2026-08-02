@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.database import Base, get_database_session
 from app.main import app
 from app.models import (
+    CompetitorDateError,
     CompetitorListing,
     CompetitorObservation,
     CompetitorPriceTarget,
@@ -219,22 +220,25 @@ def test_two_stage_callbacks_persist_calendar_quotes_and_price(monkeypatch):
                 operation="quotes"
             ).one()
             assert target.price_method == "quote_difference_left"
-            assert len(target.quote_ids) == 2
+            assert len(target.quote_ids) == 3
             assert batch.status == "running"
             expected = list(batch.expected_quote_ids)
             quote_dates = {}
             for quote_id in expected:
                 if quote_id == target.quote_ids[0]:
                     quote_dates[quote_id] = ("2026-08-01", "2026-08-04", "3000000")
-                else:
+                elif quote_id == target.quote_ids[1]:
                     quote_dates[quote_id] = ("2026-08-01", "2026-08-03", "2000000")
+                else:
+                    quote_dates[quote_id] = ("2026-08-03", "2026-08-05", "2200000")
             batch_id = batch.id
+        failed_quote_id = target.quote_ids[2]
         quote_payload = {
             "operation": "quotes",
             "run_id": run_id,
             "batch_id": batch_id,
             "external_listing_id": "123",
-            "status": "succeeded",
+            "status": "partially_succeeded",
             "quotes": [
                 {
                     "quote_id": quote_id,
@@ -247,8 +251,15 @@ def test_two_stage_callbacks_persist_calendar_quotes_and_price(monkeypatch):
                     "parser_version": "checkout-v1",
                 }
                 for quote_id, values in quote_dates.items()
+                if quote_id != failed_quote_id
             ],
-            "quote_errors": [],
+            "quote_errors": [
+                {
+                    "quote_id": failed_quote_id,
+                    "code": "checkout_rejected",
+                    "message": "Airbnb checkout status is PRICE_FAILURE",
+                }
+            ],
             "error": None,
         }
         first = client.post(
@@ -272,6 +283,9 @@ def test_two_stage_callbacks_persist_calendar_quotes_and_price(monkeypatch):
             assert observation.price == Decimal("1000000")
             assert observation.price_method == "quote_difference_left"
             assert session.query(CompetitorStayQuote).count() == 2
+            date_error = session.query(CompetitorDateError).one()
+            assert date_error.code == "checkout_rejected"
+            assert date_error.message == "Airbnb checkout status is PRICE_FAILURE"
             assert session.get(Run, run_id).status == RunStatus.succeeded
     finally:
         settings.competitor_callback_token = old_token
