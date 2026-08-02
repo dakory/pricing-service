@@ -9,6 +9,8 @@ from statistics import median
 DEFAULT_PRICING_CONFIGURATION = {
     "base_price_mode": "market_median",
     "manual_base_price": None,
+    # Converts Airbnb's guest-facing total to a comparable canonical host price.
+    "guest_to_host_price_factor": 0.839,
     "market_price_adjustment": 0.0,
     "demand_adjustment_enabled": True,
     "urgency_adjustment_enabled": True,
@@ -106,18 +108,26 @@ def calculate_price(
         raise ValueError("all_pricing_group_property_count must be positive")
 
     base_price_mode = configuration["base_price_mode"]
-    market_price = (
+    airbnb_guest_market_median = (
         float(median(available_competitor_prices))
         if available_competitor_prices
         else None
     )
+    guest_to_host_price_factor = float(
+        configuration["guest_to_host_price_factor"]
+    )
+    estimated_host_price_median = (
+        airbnb_guest_market_median * guest_to_host_price_factor
+        if airbnb_guest_market_median is not None
+        else None
+    )
     market_price_adjustment = float(configuration["market_price_adjustment"])
     if base_price_mode == "market_median":
-        if market_price is None:
+        if estimated_host_price_median is None:
             raise ValueError(
                 "at least one available competitor price is required for market_median mode"
             )
-        base_price = market_price * (1 + market_price_adjustment)
+        base_price = estimated_host_price_median * (1 + market_price_adjustment)
     elif base_price_mode == "manual":
         manual_base_price = configuration.get("manual_base_price")
         if manual_base_price is None:
@@ -173,7 +183,9 @@ def calculate_price(
             "unavailable_competitor_count": unavailable_competitor_count,
             "all_tracked_competitor_count": all_tracked_competitor_count,
             "competitor_unavailability": competitor_unavailability,
-            "market_price": market_price,
+            "airbnb_guest_market_median": airbnb_guest_market_median,
+            "guest_to_host_price_factor": guest_to_host_price_factor,
+            "estimated_host_price_median": estimated_host_price_median,
             "base_price_mode": base_price_mode,
             "market_price_adjustment": market_price_adjustment,
             "manual_base_price": configuration.get("manual_base_price"),

@@ -27,14 +27,16 @@ def test_market_demand_and_urgency_formula():
     )
 
     explanation = result["explanation"]
-    assert explanation["market_price"] == 1_500_000
+    assert explanation["airbnb_guest_market_median"] == 1_500_000
+    assert explanation["guest_to_host_price_factor"] == 0.839
+    assert explanation["estimated_host_price_median"] == pytest.approx(1_258_500)
     assert explanation["competitor_unavailability"] == pytest.approx(0.75)
     assert explanation["pricing_group_occupancy"] == pytest.approx(2 / 3)
     assert explanation["demand_score"] == pytest.approx(0.725)
     assert explanation["demand_adjustment"] == pytest.approx(0.09)
     assert explanation["urgency_adjustment"] == -0.10
-    assert explanation["raw_price"] == pytest.approx(1_485_000)
-    assert result["price"] == 1_500_000
+    assert explanation["raw_price"] == pytest.approx(1_245_915)
+    assert result["price"] == 1_250_000
 
 
 @pytest.mark.parametrize(
@@ -128,10 +130,10 @@ def test_market_offset_changes_the_median_base_price():
         configuration=configuration,
     )
 
-    assert result["explanation"]["base_price"] == 1_350_000
+    assert result["explanation"]["base_price"] == pytest.approx(1_132_650)
     assert result["explanation"]["demand_adjustment"] == 0
     assert result["explanation"]["urgency_adjustment"] == 0
-    assert result["price"] == 1_350_000
+    assert result["price"] == 1_130_000
 
 
 def test_manual_base_price_does_not_require_competitor_prices():
@@ -156,6 +158,6 @@ def test_manual_base_price_does_not_require_competitor_prices():
         configuration=configuration,
     )
 
-    assert result["explanation"]["market_price"] is None
+    assert result["explanation"]["estimated_host_price_median"] is None
     assert result["explanation"]["base_price"] == 1_234_000
     assert result["price"] == 1_234_000

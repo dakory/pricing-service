@@ -99,6 +99,7 @@ class PricingConfiguration(BaseModel):
 
     base_price_mode: Literal["market_median", "manual"]
     manual_base_price: Decimal | None = Field(default=None, gt=0)
+    guest_to_host_price_factor: float = Field(gt=0, le=1)
     market_price_adjustment: float = Field(gt=-1)
     demand_adjustment_enabled: bool
     urgency_adjustment_enabled: bool

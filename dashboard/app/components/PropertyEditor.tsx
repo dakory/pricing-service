@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 type UrgencyTier = { maximum_days: number; adjustment: number };
 type PricingConfiguration = {
   base_price_mode: "market_median" | "manual"; manual_base_price: number | null;
+  guest_to_host_price_factor: number;
   market_price_adjustment: number; demand_adjustment_enabled: boolean;
   urgency_adjustment_enabled: boolean; competitor_weight: number;
   pricing_group_weight: number; neutral_demand_score: number;
@@ -36,7 +37,8 @@ function Hint({ children }: { children: ReactNode }) {
 function FormulaCard() {
   return <div className="card">
     <h2>How the price is calculated</h2>
-    <p><code>base price = market median × (1 + market offset)</code> <span className="muted">or a manually entered base price</span></p>
+    <p><code>estimated host price median = Airbnb guest price median × guest-to-host factor</code></p>
+    <p><code>base price = estimated host price median × (1 + market offset)</code> <span className="muted">or a manually entered base price</span></p>
     <p><code>demand score = competitor weight × competitor unavailability + pricing-group weight × pricing-group occupancy</code></p>
     <p><code>raw price = base price × (1 + demand adjustment + urgency adjustment)</code></p>
     <p><code>final price = manual date override ?? round(clamp(raw price, minimum, maximum), pricing step)</code></p>
@@ -153,6 +155,7 @@ export function PricingConfigurationEditor({ configuration }: { configuration: P
     const manualValue = String(form.get("manual_base_price") ?? "").trim();
     const payload = {
       base_price_mode: form.get("base_price_mode"), manual_base_price: manualValue ? Number(manualValue) : null,
+      guest_to_host_price_factor: number("guest_to_host_price_factor"),
       market_price_adjustment: number("market_price_adjustment"),
       demand_adjustment_enabled: form.get("demand_adjustment_enabled") === "on",
       urgency_adjustment_enabled: form.get("urgency_adjustment_enabled") === "on",
@@ -168,6 +171,7 @@ export function PricingConfigurationEditor({ configuration }: { configuration: P
     <h3>Base price</h3><div className="form-grid four">
       <label>Base price method<select name="base_price_mode" defaultValue={configuration.base_price_mode}><option value="market_median">Market median</option><option value="manual">Manual</option></select><Hint>Default source of the starting price.</Hint></label>
       <label>Manual base price<input name="manual_base_price" type="number" min="1" defaultValue={configuration.manual_base_price ?? ""}/><Hint>Required when the global method is Manual.</Hint></label>
+      <label>Guest-to-host price factor<input name="guest_to_host_price_factor" type="number" min="0.01" max="1" step="0.001" defaultValue={configuration.guest_to_host_price_factor}/><Hint>Estimates a comparable host price from Airbnb guest prices; 0.839 removes 16.1%.</Hint></label>
       <label>Market offset<input name="market_price_adjustment" type="number" min="-0.99" step="0.01" defaultValue={configuration.market_price_adjustment}/><Hint>−0.10 prices 10% below the competitor median.</Hint></label>
     </div>
     <h3>Demand</h3><div className="form-grid four">

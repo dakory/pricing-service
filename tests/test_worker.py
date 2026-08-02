@@ -81,7 +81,8 @@ def test_shadow_optimizer_uses_exact_date_group_and_competitor_data():
         assert generate_price_recommendations(db, horizon_days=4, today=start) == 2
         gap_day = db.scalar(select(Recommendation).where(Recommendation.property_id == prop.id, Recommendation.stay_date == date(2026, 7, 23)))
         assert gap_day.actual_price == Decimal("1000000")
-        assert gap_day.explanation["market_price"] == 1200000
+        assert gap_day.explanation["airbnb_guest_market_median"] == 1200000
+        assert gap_day.explanation["estimated_host_price_median"] == pytest.approx(1006800)
         assert gap_day.explanation["competitor_unavailability"] == 0.5
         assert gap_day.explanation["pricing_group_occupancy"] == 0
         assert gap_day.explanation["engine_version"] == "v2"
