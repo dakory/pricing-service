@@ -94,40 +94,56 @@ class OverrideCreate(BaseModel):
         return self
 
 
+class UrgencyRule(BaseModel):
+    """Define one inclusive lead-time discount range."""
+
+    minimum_days: int = Field(ge=0)
+    maximum_days: int = Field(ge=0)
+    adjustment: float = Field(ge=-1, le=0)
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        """Require the lower boundary not to exceed the upper boundary."""
+
+        if self.minimum_days > self.maximum_days:
+            raise ValueError("minimum_days must not exceed maximum_days")
+        return self
+
+
+def validate_urgency_rules(rules: list[UrgencyRule]) -> list[UrgencyRule]:
+    """Validate and sort at most ten non-overlapping urgency ranges."""
+
+    if len(rules) > 10:
+        raise ValueError("at most 10 urgency rules are allowed")
+    ordered = sorted(rules, key=lambda rule: rule.minimum_days)
+    for previous, current in zip(ordered, ordered[1:]):
+        if current.minimum_days <= previous.maximum_days:
+            raise ValueError("urgency rules must not overlap")
+    return ordered
+
+
 class PricingConfiguration(BaseModel):
-    """Validate global Pricing Engine v2 coefficients."""
+    """Validate global Pricing Engine v3 settings."""
+
+    model_config = ConfigDict(extra="forbid")
 
     base_price_mode: Literal["market_median", "manual"]
     manual_base_price: Decimal | None = Field(default=None, gt=0)
     guest_to_host_price_factor: float = Field(gt=0, le=1)
-    market_price_adjustment: float = Field(gt=-1)
-    demand_adjustment_enabled: bool
+    market_positioning_factor: float = Field(gt=0)
+    minimum_competitor_count: int = Field(ge=1, le=30)
     urgency_adjustment_enabled: bool
-    competitor_weight: float = Field(ge=0, le=1)
-    pricing_group_weight: float = Field(ge=0, le=1)
-    neutral_demand_score: float = Field(ge=0, le=1)
-    demand_adjustment_slope: float = Field(ge=0)
-    minimum_demand_adjustment: float = Field(ge=-1, le=0)
-    maximum_demand_adjustment: float = Field(ge=0, le=1)
-    urgency_adjustments: list[dict]
+    urgency_adjustments: list[UrgencyRule]
 
     @model_validator(mode="after")
     def valid_configuration(self):
-        """Require normalized weights and valid non-positive urgency tiers."""
+        """Require a valid base-price mode and urgency rule set."""
 
-        if abs(self.competitor_weight + self.pricing_group_weight - 1.0) > 1e-9:
-            raise ValueError("competitor_weight + pricing_group_weight must equal 1.0")
         if self.base_price_mode == "manual" and self.manual_base_price is None:
             raise ValueError("manual_base_price is required in manual mode")
-        maximum_days = []
-        for tier in self.urgency_adjustments:
-            if "maximum_days" not in tier or "adjustment" not in tier:
-                raise ValueError("each urgency tier requires maximum_days and adjustment")
-            if int(tier["maximum_days"]) < 0 or float(tier["adjustment"]) > 0:
-                raise ValueError("urgency tiers require non-negative days and non-positive adjustments")
-            maximum_days.append(int(tier["maximum_days"]))
-        if len(maximum_days) != len(set(maximum_days)):
-            raise ValueError("urgency tier maximum_days values must be unique")
+        self.urgency_adjustments = validate_urgency_rules(
+            self.urgency_adjustments
+        )
         return self
 
 
@@ -138,16 +154,20 @@ class PricingConfigurationOverride(BaseModel):
 
     base_price_mode: Literal["market_median", "manual"] | None = None
     manual_base_price: Decimal | None = Field(default=None, gt=0)
-    market_price_adjustment: float | None = Field(default=None, gt=-1)
-    demand_adjustment_enabled: bool | None = None
+    market_positioning_factor: float | None = Field(default=None, gt=0)
+    minimum_competitor_count: int | None = Field(default=None, ge=1, le=30)
     urgency_adjustment_enabled: bool | None = None
-    competitor_weight: float | None = Field(default=None, ge=0, le=1)
-    pricing_group_weight: float | None = Field(default=None, ge=0, le=1)
-    neutral_demand_score: float | None = Field(default=None, ge=0, le=1)
-    demand_adjustment_slope: float | None = Field(default=None, ge=0)
-    minimum_demand_adjustment: float | None = Field(default=None, ge=-1, le=0)
-    maximum_demand_adjustment: float | None = Field(default=None, ge=0, le=1)
-    urgency_adjustments: list[dict] | None = None
+    urgency_adjustments: list[UrgencyRule] | None = None
+
+    @model_validator(mode="after")
+    def valid_rules(self):
+        """Validate a supplied replacement urgency list."""
+
+        if self.urgency_adjustments is not None:
+            self.urgency_adjustments = validate_urgency_rules(
+                self.urgency_adjustments
+            )
+        return self
 
 
 class ModeUpdate(BaseModel):

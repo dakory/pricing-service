@@ -77,15 +77,16 @@ def test_shadow_optimizer_uses_exact_date_group_and_competitor_data():
             stay_date = start.replace(day=start.day + offset)
             db.add(CompetitorObservation(competitor_listing_id=competitor_one.id, stay_date=stay_date, price=Decimal("1200000"), available=True, available_for_checkin=True, minimum_stay=2, currency="IDR", scraped_at=datetime.now(timezone.utc), parser_version="test", price_method="test"))
             db.add(CompetitorObservation(competitor_listing_id=competitor_two.id, stay_date=stay_date, price=None, available=False, available_for_checkin=False, minimum_stay=None, currency="IDR", scraped_at=datetime.now(timezone.utc), parser_version="test", price_method="test"))
+        db.add(Setting(key="pricing_engine_v2", value={"minimum_competitor_count": 1, "urgency_adjustment_enabled": False}))
         db.commit()
         assert generate_price_recommendations(db, horizon_days=4, today=start) == 2
         gap_day = db.scalar(select(Recommendation).where(Recommendation.property_id == prop.id, Recommendation.stay_date == date(2026, 7, 23)))
         assert gap_day.actual_price == Decimal("1000000")
         assert gap_day.explanation["airbnb_guest_market_median"] == 1200000
         assert gap_day.explanation["estimated_host_price_median"] == pytest.approx(1006800)
-        assert gap_day.explanation["competitor_unavailability"] == 0.5
-        assert gap_day.explanation["pricing_group_occupancy"] == 0
-        assert gap_day.explanation["engine_version"] == "v2"
+        assert gap_day.explanation["available_competitor_count"] == 1
+        assert gap_day.explanation["minimum_competitor_count"] == 1
+        assert gap_day.explanation["engine_version"] == "v3"
 
 
 def test_property_pricing_settings_override_only_selected_global_values():
@@ -107,23 +108,15 @@ def test_property_pricing_settings_override_only_selected_global_values():
             min_price=Decimal("500000"),
             max_price=Decimal("2000000"),
             rounding_increment=50000,
-            pricing_settings={
-                "base_price_mode": "manual",
-                "manual_base_price": 1_250_000,
-                "urgency_adjustment_enabled": False,
-                "urgency_adjustments": [
-                    {"maximum_days": 7, "adjustment": -0.12}
-                ],
-            },
+                pricing_settings={"base_price_mode": "manual", "manual_base_price": 1_250_000, "urgency_adjustment_enabled": False, "urgency_adjustments": [{"minimum_days": 0, "maximum_days": 7, "adjustment": -0.12}]},
         )
         db.add(prop)
         db.add(
             Setting(
                 key="pricing_engine_v2",
                 value={
-                    "competitor_weight": 0.6,
-                    "pricing_group_weight": 0.4,
-                    "market_price_adjustment": -0.1,
+                    "minimum_competitor_count": 12,
+                    "market_positioning_factor": 0.9,
                 },
             )
         )
@@ -133,12 +126,8 @@ def test_property_pricing_settings_override_only_selected_global_values():
         assert effective["base_price_mode"] == "manual"
         assert effective["manual_base_price"] == 1_250_000
         assert effective["urgency_adjustment_enabled"] is False
-        assert effective["competitor_weight"] == 0.6
-        assert effective["market_price_adjustment"] == -0.1
-        assert effective["demand_adjustment_enabled"] is True
+        assert effective["minimum_competitor_count"] == 12
+        assert effective["market_positioning_factor"] == 0.9
         assert effective["urgency_adjustments"] == [
-            {"maximum_days": 3, "adjustment": -0.15},
-            {"maximum_days": 7, "adjustment": -0.12},
-            {"maximum_days": 14, "adjustment": -0.05},
-            {"maximum_days": 30, "adjustment": -0.02},
+            {"minimum_days": 0, "maximum_days": 7, "adjustment": -0.12},
         ]

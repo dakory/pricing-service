@@ -4,6 +4,7 @@ import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from statistics import median
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from app.competitor_scrapes import start_collection_run
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, Override, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, MarketPriceSnapshot, Override, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
 from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, merge_pricing_configuration
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
@@ -191,7 +192,7 @@ def latest_competitor_observations(
 def generate_price_recommendations(
     db: Session, horizon_days: int = 365, today: date | None = None
 ) -> int:
-    """Generate and persist Pricing Engine v2 recommendations for free dates."""
+    """Generate and persist Pricing Engine v3 recommendations for free dates."""
 
     settings = get_settings()
     today = today or datetime.now(settings.timezone).date()
@@ -201,9 +202,6 @@ def generate_price_recommendations(
         prop.id: property_availability(db, prop, today, horizon_days)
         for prop in properties
     }
-    properties_by_group: dict[int, list[Property]] = {}
-    for prop in properties:
-        properties_by_group.setdefault(prop.pricing_group_id, []).append(prop)
     db.execute(
         delete(Recommendation).where(
             Recommendation.stay_date >= today,
@@ -217,7 +215,19 @@ def generate_price_recommendations(
         observations = latest_competitor_observations(
             db, prop.pricing_group, today, horizon_end
         )
-        group_properties = properties_by_group[prop.pricing_group_id]
+        saved_snapshots = {
+            item.stay_date: item
+            for item in db.scalars(
+                select(MarketPriceSnapshot).where(
+                    MarketPriceSnapshot.property_id == prop.id,
+                    MarketPriceSnapshot.stay_date >= today,
+                    MarketPriceSnapshot.stay_date < horizon_end,
+                )
+            ).all()
+        }
+        minimum_competitor_count = int(
+            configuration["minimum_competitor_count"]
+        )
         stale = imported_at is None or imported_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(hours=36)
         for offset in range(horizon_days):
             stay_date = today + timedelta(days=offset)
@@ -229,35 +239,49 @@ def generate_price_recommendations(
                 for observation in by_url.values()
                 if observation.bookable and observation.price is not None
             ]
-            if (
-                configuration["base_price_mode"] == "market_median"
-                and not available_prices
-            ):
-                continue
             override = active_override(db, prop.id, stay_date)
             current = calendar.get(stay_date)
-            booked_property_count = sum(
-                stay_date in availability[group_property.id][1]
-                for group_property in group_properties
-            )
+            if (
+                configuration["base_price_mode"] == "market_median"
+                and override is None
+                and len(available_prices) >= minimum_competitor_count
+            ):
+                raw_median = float(median(available_prices))
+                snapshot = saved_snapshots.get(stay_date)
+                if snapshot is None:
+                    snapshot = MarketPriceSnapshot(
+                        property_id=prop.id,
+                        stay_date=stay_date,
+                        guest_market_median=raw_median,
+                        competitor_count=len(available_prices),
+                        observed_at=datetime.now(timezone.utc),
+                    )
+                    db.add(snapshot)
+                    saved_snapshots[stay_date] = snapshot
+                else:
+                    snapshot.guest_market_median = raw_median
+                    snapshot.competitor_count = len(available_prices)
+                    snapshot.observed_at = datetime.now(timezone.utc)
+            saved_market = saved_snapshots.get(stay_date)
             result = calculate_price(
                 stay_date=stay_date,
                 current_date=today,
-                available_competitor_prices=available_prices,
-                unavailable_competitor_count=sum(
-                    not observation.bookable for observation in by_url.values()
+                competitor_prices=available_prices,
+                saved_market_price=(
+                    float(saved_market.guest_market_median)
+                    if saved_market is not None
+                    else None
                 ),
-                all_tracked_competitor_count=len(
-                    prop.pricing_group.competitor_urls
-                ),
-                booked_pricing_group_property_count=booked_property_count,
-                all_pricing_group_property_count=len(group_properties),
+                current_price=float(current.price) if current and current.price is not None else None,
+                minimum_competitor_count=minimum_competitor_count,
                 minimum_price=float(prop.min_price),
                 maximum_price=float(prop.max_price),
                 pricing_step=prop.rounding_increment,
                 configuration=configuration,
                 manual_override=float(override.price) if override else None,
             )
+            if result is None:
+                continue
             warnings = []
             if stale:
                 warnings.append("stale_hostex_import" if imported_at else "missing_hostex_calendar")
@@ -268,7 +292,10 @@ def generate_price_recommendations(
                 change_pct = (result["price"] - float(current.price)) / float(current.price)
                 if abs(change_pct) >= 0.20:
                     warnings.append("large_price_change")
-            if result["explanation"]["bounded_price"] in (float(prop.min_price), float(prop.max_price)):
+            if result["explanation"].get("final_price") in (
+                float(prop.min_price),
+                float(prop.max_price),
+            ):
                 warnings.append("price_at_bound")
             result["explanation"].update(
                 {

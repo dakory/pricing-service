@@ -1,163 +1,75 @@
 from datetime import date, timedelta
 
 import pytest
+from pydantic import ValidationError
 
-from app.pricing import (
-    DEFAULT_PRICING_CONFIGURATION,
-    calculate_demand_adjustment,
-    calculate_price,
-    calculate_urgency_adjustment,
-)
+from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, calculate_urgency_adjustment
+from app.schemas import PricingConfiguration
 
 
-def test_market_demand_and_urgency_formula():
-    today = date(2026, 7, 30)
-    result = calculate_price(
-        stay_date=today + timedelta(days=5),
-        current_date=today,
-        available_competitor_prices=[1_000_000, 1_500_000, 2_000_000],
-        unavailable_competitor_count=3,
-        all_tracked_competitor_count=4,
-        booked_pricing_group_property_count=2,
-        all_pricing_group_property_count=3,
-        minimum_price=500_000,
-        maximum_price=3_000_000,
-        pricing_step=50_000,
-        configuration=DEFAULT_PRICING_CONFIGURATION,
+def args(**overrides):
+    value = dict(
+        stay_date=date(2026, 8, 10), current_date=date(2026, 8, 1),
+        competitor_prices=[1_000_000, 1_500_000, 2_000_000], saved_market_price=None,
+        current_price=900_000, minimum_competitor_count=3, minimum_price=500_000,
+        maximum_price=2_000_000, pricing_step=10_000,
+        configuration=dict(DEFAULT_PRICING_CONFIGURATION, urgency_adjustment_enabled=False),
     )
-
-    explanation = result["explanation"]
-    assert explanation["airbnb_guest_market_median"] == 1_500_000
-    assert explanation["guest_to_host_price_factor"] == 0.839
-    assert explanation["estimated_host_price_median"] == pytest.approx(1_258_500)
-    assert explanation["competitor_unavailability"] == pytest.approx(0.75)
-    assert explanation["pricing_group_occupancy"] == pytest.approx(2 / 3)
-    assert explanation["demand_score"] == pytest.approx(0.725)
-    assert explanation["demand_adjustment"] == pytest.approx(0.09)
-    assert explanation["urgency_adjustment"] == -0.10
-    assert explanation["raw_price"] == pytest.approx(1_245_915)
-    assert result["price"] == 1_250_000
+    value.update(overrides)
+    return value
 
 
-@pytest.mark.parametrize(
-    ("days", "expected"),
-    [(0, -0.15), (3, -0.15), (4, -0.10), (7, -0.10), (8, -0.05), (14, -0.05), (15, -0.02), (30, -0.02), (31, 0)],
-)
-def test_urgency_tiers(days, expected):
+@pytest.mark.parametrize("days, expected", [(0, -.15), (3, -.15), (4, -.10), (7, -.10), (8, -.05), (14, -.05), (15, -.02), (30, -.02), (31, 0)])
+def test_urgency_ranges_are_inclusive(days, expected):
     assert calculate_urgency_adjustment(days, DEFAULT_PRICING_CONFIGURATION) == expected
 
 
-def test_demand_adjustment_is_bounded():
-    configuration = {
-        **DEFAULT_PRICING_CONFIGURATION,
-        "demand_adjustment_slope": 2,
-    }
-    assert calculate_demand_adjustment(0, configuration) == -0.20
-    assert calculate_demand_adjustment(1, configuration) == 0.20
-
-
-def test_bounds_rounding_and_override_order():
-    today = date(2026, 7, 30)
-    bounded = calculate_price(
-        stay_date=today + timedelta(days=60),
-        current_date=today,
-        available_competitor_prices=[3_000_000],
-        unavailable_competitor_count=0,
-        all_tracked_competitor_count=1,
-        booked_pricing_group_property_count=0,
-        all_pricing_group_property_count=1,
-        minimum_price=900_000,
-        maximum_price=1_100_000,
-        pricing_step=50_000,
-        configuration=DEFAULT_PRICING_CONFIGURATION,
-    )
-    overridden = calculate_price(
-        stay_date=today,
-        current_date=today,
-        available_competitor_prices=[1_000_000],
-        unavailable_competitor_count=0,
-        all_tracked_competitor_count=1,
-        booked_pricing_group_property_count=0,
-        all_pricing_group_property_count=1,
-        minimum_price=900_000,
-        maximum_price=1_100_000,
-        pricing_step=50_000,
-        configuration=DEFAULT_PRICING_CONFIGURATION,
-        manual_override=1_234_567,
-    )
-
-    assert bounded["explanation"]["bounded_price"] == 1_100_000
-    assert bounded["price"] == 1_100_000
-    assert overridden["price"] == 1_234_567
-    assert overridden["explanation"]["manual_override"] == 1_234_567
-
-
-def test_available_competitor_price_is_required():
-    with pytest.raises(ValueError, match="at least one"):
-        calculate_price(
-            stay_date=date.today(),
-            current_date=date.today(),
-            available_competitor_prices=[],
-            unavailable_competitor_count=1,
-            all_tracked_competitor_count=1,
-            booked_pricing_group_property_count=0,
-            all_pricing_group_property_count=1,
-            minimum_price=1,
-            maximum_price=2,
-            pricing_step=1,
-            configuration=DEFAULT_PRICING_CONFIGURATION,
-        )
-
-
-def test_market_offset_changes_the_median_base_price():
-    configuration = {
-        **DEFAULT_PRICING_CONFIGURATION,
-        "market_price_adjustment": -0.10,
-        "demand_adjustment_enabled": False,
-        "urgency_adjustment_enabled": False,
-    }
-    result = calculate_price(
-        stay_date=date(2026, 9, 1),
-        current_date=date(2026, 7, 30),
-        available_competitor_prices=[1_000_000, 1_500_000, 2_000_000],
-        unavailable_competitor_count=0,
-        all_tracked_competitor_count=3,
-        booked_pricing_group_property_count=0,
-        all_pricing_group_property_count=1,
-        minimum_price=500_000,
-        maximum_price=2_000_000,
-        pricing_step=10_000,
-        configuration=configuration,
-    )
-
+def test_market_conversion_positioning_and_rounding_then_clamp():
+    result = calculate_price(**args(configuration={**DEFAULT_PRICING_CONFIGURATION, "market_positioning_factor": .9, "urgency_adjustment_enabled": False}))
+    assert result["explanation"]["airbnb_guest_market_median"] == 1_500_000
+    assert result["explanation"]["estimated_host_price_median"] == pytest.approx(1_258_500)
     assert result["explanation"]["base_price"] == pytest.approx(1_132_650)
-    assert result["explanation"]["demand_adjustment"] == 0
-    assert result["explanation"]["urgency_adjustment"] == 0
     assert result["price"] == 1_130_000
+    assert result["explanation"]["engine_version"] == "v3"
 
 
-def test_manual_base_price_does_not_require_competitor_prices():
-    configuration = {
-        **DEFAULT_PRICING_CONFIGURATION,
-        "base_price_mode": "manual",
-        "manual_base_price": 1_234_000,
-        "demand_adjustment_enabled": False,
-        "urgency_adjustment_enabled": False,
-    }
-    result = calculate_price(
-        stay_date=date(2026, 9, 1),
-        current_date=date(2026, 7, 30),
-        available_competitor_prices=[],
-        unavailable_competitor_count=0,
-        all_tracked_competitor_count=0,
-        booked_pricing_group_property_count=0,
-        all_pricing_group_property_count=1,
-        minimum_price=500_000,
-        maximum_price=2_000_000,
-        pricing_step=1_000,
-        configuration=configuration,
-    )
+def test_manual_override_bypasses_rounding_and_bounds():
+    result = calculate_price(**args(manual_override=2_345_678, minimum_price=500_000, maximum_price=1_000_000))
+    assert result["price"] == 2_345_678
+    assert result["explanation"]["price_source"] == "manual_override"
 
-    assert result["explanation"]["estimated_host_price_median"] is None
-    assert result["explanation"]["base_price"] == 1_234_000
-    assert result["price"] == 1_234_000
+
+def test_market_falls_back_to_saved_then_current_price_then_none():
+    saved = calculate_price(**args(competitor_prices=[1_000_000], minimum_competitor_count=3, saved_market_price=1_200_000))
+    assert saved["explanation"]["price_source"] == "saved_market"
+    current = calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=777_777))
+    assert current["price"] == 777_777
+    assert current["explanation"]["price_source"] == "current_hostex_price"
+    assert calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=None)) is None
+
+
+def test_manual_base_does_not_need_market():
+    result = calculate_price(**args(competitor_prices=[], current_price=None, configuration={**DEFAULT_PRICING_CONFIGURATION, "base_price_mode": "manual", "manual_base_price": 1_234_000, "urgency_adjustment_enabled": False}))
+    assert result["price"] == 1_230_000
+    assert result["explanation"]["price_source"] == "manual_base"
+
+
+def test_urgency_gaps_and_disabled_rules_are_zero():
+    assert calculate_urgency_adjustment(5, {**DEFAULT_PRICING_CONFIGURATION, "urgency_adjustments": [{"minimum_days": 0, "maximum_days": 3, "adjustment": -.2}]}) == 0
+    assert calculate_urgency_adjustment(1, {**DEFAULT_PRICING_CONFIGURATION, "urgency_adjustment_enabled": False}) == 0
+
+
+def test_rounding_precedes_clamp():
+    result = calculate_price(**args(competitor_prices=[1_234_567], minimum_competitor_count=1, minimum_price=1_000_000, maximum_price=1_500_000, pricing_step=100_000, configuration={**DEFAULT_PRICING_CONFIGURATION, "guest_to_host_price_factor": 1.0, "urgency_adjustment_enabled": False}))
+    assert result["explanation"]["rounded_price"] == 1_200_000
+    assert result["price"] == 1_200_000
+
+
+def test_configuration_rejects_overlapping_or_excessive_rules_and_demand_fields():
+    common = dict(base_price_mode="market_median", guest_to_host_price_factor=.839, market_positioning_factor=1, minimum_competitor_count=10, urgency_adjustment_enabled=True)
+    with pytest.raises(ValidationError):
+        PricingConfiguration(**common, urgency_adjustments=[{"minimum_days": 0, "maximum_days": 3, "adjustment": -.1}, {"minimum_days": 3, "maximum_days": 5, "adjustment": -.1}])
+    with pytest.raises(ValidationError):
+        PricingConfiguration(**common, urgency_adjustments=[{"minimum_days": i, "maximum_days": i, "adjustment": 0} for i in range(11)])
+    with pytest.raises(ValidationError):
+        PricingConfiguration(**common, urgency_adjustments=[], demand_adjustment_enabled=False)

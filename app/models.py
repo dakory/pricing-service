@@ -364,6 +364,26 @@ class Setting(Base):
     value: Mapped[dict] = mapped_column(JSON)
 
 
+class MarketPriceSnapshot(Base):
+    """Persist the latest valid raw competitor median for a property date."""
+
+    __tablename__ = "market_price_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "property_id",
+            "stay_date",
+            name="uq_market_price_snapshot_property_date",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id"))
+    stay_date: Mapped[date] = mapped_column(Date)
+    guest_market_median: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    competitor_count: Mapped[int] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AdminSession(Base):
     """Store a hashed single-administrator browser session."""
 

@@ -860,7 +860,7 @@ def set_mode(payload: ModeUpdate, db: Session = Depends(get_database_session)):
 
 @router.get("/settings/pricing", dependencies=[Depends(require_session)])
 def get_pricing_configuration(db: Session = Depends(get_database_session)):
-    """Return the effective Pricing Engine v2 configuration."""
+    """Return the effective Pricing Engine v3 configuration."""
 
     return pricing_configuration(db)
 
@@ -869,7 +869,7 @@ def get_pricing_configuration(db: Session = Depends(get_database_session)):
 def set_pricing_configuration(
     payload: PricingConfiguration, db: Session = Depends(get_database_session)
 ):
-    """Persist validated Pricing Engine v2 coefficients."""
+    """Persist validated Pricing Engine v3 settings."""
 
     value = payload.model_dump(mode="json")
     item = db.get(Setting, "pricing_engine_v2")
