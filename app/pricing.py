@@ -86,14 +86,16 @@ def calculate_price(
     if manual_override is not None:
         return {
             "price": float(manual_override),
-            "explanation": {
-                "engine_version": "v3",
-                "stay_date": stay_date.isoformat(),
-                "price_source": "manual_override",
-                "days_until_stay": days_until_stay,
-                "manual_override": manual_override,
-                "final_price": float(manual_override),
-            },
+                "explanation": {
+                    "engine_version": "v3",
+                    "stay_date": stay_date.isoformat(),
+                    "price_source": "manual_override",
+                    "days_until_stay": days_until_stay,
+                    "manual_override": manual_override,
+                    "urgency_adjustment_enabled": bool(configuration.get("urgency_adjustment_enabled", True)),
+                    "urgency_adjustment_applied": False,
+                    "final_price": float(manual_override),
+                },
         }
 
     base_price_mode = configuration["base_price_mode"]
@@ -124,6 +126,9 @@ def calculate_price(
                     "available_competitor_count": market_price_count,
                     "minimum_competitor_count": minimum_competitor_count,
                     "current_price": current_price,
+                    "urgency_adjustment_enabled": bool(configuration.get("urgency_adjustment_enabled", True)),
+                    "urgency_adjustment_applied": False,
+                    "urgency_adjustment": 0.0,
                     "final_price": float(current_price),
                 },
             }
@@ -170,6 +175,7 @@ def calculate_price(
             "urgency_adjustment_enabled": configuration.get(
                 "urgency_adjustment_enabled", True
             ),
+            "urgency_adjustment_applied": True,
             "urgency_adjustment": urgency_adjustment,
             "raw_price": round(raw_price, 2),
             "rounded_price": rounded_price,
