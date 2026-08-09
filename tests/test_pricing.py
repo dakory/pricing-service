@@ -43,17 +43,18 @@ def test_market_falls_back_to_saved_then_current_price_then_none():
     saved = calculate_price(**args(competitor_prices=[1_000_000], minimum_competitor_count=3, saved_market_price=1_200_000))
     assert saved["explanation"]["price_source"] == "saved_market"
     current = calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=777_777))
-    assert current["price"] == 777_777
+    assert current["price"] == 780_000
     assert current["explanation"]["price_source"] == "current_hostex_price"
     assert current["explanation"]["urgency_adjustment_enabled"] is False
-    assert current["explanation"]["urgency_adjustment_applied"] is False
+    assert current["explanation"]["urgency_adjustment_applied"] is True
     assert calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=None)) is None
 
 
 def test_current_price_fallback_preserves_inherited_enabled_urgency_state():
     result = calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=777_777, configuration=DEFAULT_PRICING_CONFIGURATION))
+    assert result["price"] == 740_000
     assert result["explanation"]["urgency_adjustment_enabled"] is True
-    assert result["explanation"]["urgency_adjustment_applied"] is False
+    assert result["explanation"]["urgency_adjustment_applied"] is True
 
 
 def test_manual_base_does_not_need_market():

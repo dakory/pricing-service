@@ -52,7 +52,7 @@ def round_to_pricing_step(value: float, pricing_step: int) -> int:
 def calculate_urgency_adjustment(days_until_stay: int, configuration: dict) -> float:
     """Return the adjustment from the matching inclusive urgency range."""
 
-    if not configuration.get("urgency_adjustment_enabled", True):
+    if not configuration["urgency_adjustment_enabled"]:
         return 0.0
     days_until_stay = max(0, days_until_stay)
     for rule in sorted(
@@ -92,7 +92,7 @@ def calculate_price(
                     "price_source": "manual_override",
                     "days_until_stay": days_until_stay,
                     "manual_override": manual_override,
-                    "urgency_adjustment_enabled": bool(configuration.get("urgency_adjustment_enabled", True)),
+                    "urgency_adjustment_enabled": configuration["urgency_adjustment_enabled"],
                     "urgency_adjustment_applied": False,
                     "final_price": float(manual_override),
                 },
@@ -116,29 +116,18 @@ def calculate_price(
             market_price = float(saved_market_price)
             market_price_source = "saved_market"
         elif current_price is not None:
-            return {
-                "price": float(current_price),
-                "explanation": {
-                    "engine_version": "v3",
-                    "stay_date": stay_date.isoformat(),
-                    "price_source": "current_hostex_price",
-                    "days_until_stay": days_until_stay,
-                    "available_competitor_count": market_price_count,
-                    "minimum_competitor_count": minimum_competitor_count,
-                    "current_price": current_price,
-                    "urgency_adjustment_enabled": bool(configuration.get("urgency_adjustment_enabled", True)),
-                    "urgency_adjustment_applied": False,
-                    "urgency_adjustment": 0.0,
-                    "final_price": float(current_price),
-                },
-            }
+            # The current Hostex price is a fallback base, not a final price.
+            # It still goes through urgency, rounding, and bounds.
+            base_price = float(current_price)
+            price_source = "current_hostex_price"
         else:
             return None
-        guest_to_host_factor = float(configuration["guest_to_host_price_factor"])
-        estimated_host_price_median = market_price * guest_to_host_factor
-        positioning_factor = float(configuration["market_positioning_factor"])
-        base_price = estimated_host_price_median * positioning_factor
-        price_source = market_price_source
+        if market_price is not None:
+            guest_to_host_factor = float(configuration["guest_to_host_price_factor"])
+            estimated_host_price_median = market_price * guest_to_host_factor
+            positioning_factor = float(configuration["market_positioning_factor"])
+            base_price = estimated_host_price_median * positioning_factor
+            price_source = market_price_source
     else:
         raise ValueError(f"unsupported base_price_mode: {base_price_mode}")
 
@@ -172,9 +161,7 @@ def calculate_price(
             "base_price_mode": base_price_mode,
             "manual_base_price": configuration.get("manual_base_price"),
             "base_price": round(base_price, 2),
-            "urgency_adjustment_enabled": configuration.get(
-                "urgency_adjustment_enabled", True
-            ),
+            "urgency_adjustment_enabled": configuration["urgency_adjustment_enabled"],
             "urgency_adjustment_applied": True,
             "urgency_adjustment": urgency_adjustment,
             "raw_price": round(raw_price, 2),
