@@ -12,6 +12,7 @@ from app.competitor_scrapes import (
     ensure_no_overlapping_run,
     invoke_calendar,
     pending_dates,
+    prune_competitor_observations,
     validate_scrape_range,
 )
 from app.config import get_settings
@@ -109,6 +110,41 @@ def test_pending_dates_use_mode_specific_freshness():
         assert pending_dates(
             session, listing.id, today, today, True, "precise", now
         ) == ([today], [])
+
+
+def test_prune_competitor_observations_keeps_newest_snapshot():
+    Session = database()
+    with Session() as session:
+        listing = competitor(session)
+        stay_date = date(2026, 8, 10)
+        session.add_all(
+            [
+                CompetitorObservation(
+                    competitor_listing_id=listing.id,
+                    stay_date=stay_date,
+                    price=Decimal("1000000"),
+                    bookable=True,
+                    scraped_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                    parser_version="old",
+                    price_method="minimum_stay_average",
+                ),
+                CompetitorObservation(
+                    competitor_listing_id=listing.id,
+                    stay_date=stay_date,
+                    price=Decimal("1100000"),
+                    bookable=True,
+                    scraped_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+                    parser_version="new",
+                    price_method="minimum_stay_average",
+                ),
+            ]
+        )
+        session.commit()
+        assert prune_competitor_observations(session, listing.id) == 1
+        session.commit()
+        rows = session.query(CompetitorObservation).all()
+        assert len(rows) == 1
+        assert rows[0].price == Decimal("1100000")
 
 
 def test_scrape_range_limit_is_configurable():

@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Iterable
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -25,6 +25,35 @@ from app.models import (
 
 
 TERMINAL_BATCH_STATUSES = {"succeeded", "partially_succeeded", "failed"}
+
+
+def prune_competitor_observations(db: Session, listing_id: int) -> int:
+    """Keep only the newest observation for each listing and stay date."""
+
+    ranked = (
+        select(
+            CompetitorObservation.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=CompetitorObservation.stay_date,
+                order_by=(
+                    CompetitorObservation.scraped_at.desc(),
+                    CompetitorObservation.id.desc(),
+                ),
+            )
+            .label("row_number"),
+        )
+        .where(CompetitorObservation.competitor_listing_id == listing_id)
+        .subquery()
+    )
+    result = db.execute(
+        delete(CompetitorObservation).where(
+            CompetitorObservation.id.in_(
+                select(ranked.c.id).where(ranked.c.row_number > 1)
+            )
+        )
+    )
+    return result.rowcount or 0
 
 
 def validate_scrape_range(
@@ -547,4 +576,7 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
         "quote_batch_count": len(batches),
         "date_error_count": errors,
     }
+    run.summary["pruned_observation_count"] = prune_competitor_observations(
+        db, listing.id
+    )
     db.commit()
