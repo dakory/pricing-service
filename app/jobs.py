@@ -100,6 +100,32 @@ def active_override(db: Session, property_id: int, stay_date: date) -> Override 
     )
 
 
+def load_overrides_by_date(
+    db: Session, property_ids: list[int], start: date, end: date
+) -> dict[tuple[int, date], Override]:
+    """Load the newest applicable override for each property/date in one query."""
+
+    if not property_ids:
+        return {}
+    overrides = db.scalars(
+        select(Override)
+        .where(
+            Override.property_id.in_(property_ids),
+            Override.start_date < end,
+            Override.end_date >= start,
+        )
+        .order_by(Override.created_at.desc(), Override.id.desc())
+    ).all()
+    by_date: dict[tuple[int, date], Override] = {}
+    for override in overrides:
+        cursor = max(start, override.start_date)
+        last_date = min(end - timedelta(days=1), override.end_date)
+        while cursor <= last_date:
+            by_date.setdefault((override.property_id, cursor), override)
+            cursor += timedelta(days=1)
+    return by_date
+
+
 def property_availability(db: Session, prop: Property, start: date, days: int) -> tuple[dict, set[date], datetime | None]:
     """Combine BookingSite inventory and reservations into unavailable dates."""
 
@@ -213,6 +239,9 @@ def generate_price_recommendations(
     today = today or datetime.now(settings.timezone).date()
     horizon_end = today + timedelta(days=horizon_days)
     properties = list(db.scalars(select(Property).where(Property.active.is_(True))))
+    overrides = load_overrides_by_date(
+        db, [prop.id for prop in properties], today, horizon_end
+    )
     availability = {
         prop.id: property_availability(db, prop, today, horizon_days)
         for prop in properties
@@ -254,7 +283,7 @@ def generate_price_recommendations(
                 for observation in by_url.values()
                 if observation.bookable and observation.price is not None
             ]
-            override = active_override(db, prop.id, stay_date)
+            override = overrides.get((prop.id, stay_date))
             current = calendar.get(stay_date)
             anchor = saved_anchors.get(stay_date)
             if (
@@ -358,26 +387,15 @@ def generate_price_recommendations(
                     "warnings": warnings,
                 }
             )
-            existing = db.scalar(
-                select(Recommendation).where(
-                    Recommendation.property_id == prop.id, Recommendation.stay_date == stay_date
+            db.add(
+                Recommendation(
+                    property_id=prop.id,
+                    stay_date=stay_date,
+                    actual_price=current.price if current else None,
+                    recommended_price=result["price"],
+                    explanation=result["explanation"],
                 )
             )
-            if existing:
-                existing.actual_price = current.price if current else None
-                existing.recommended_price = result["price"]
-                existing.explanation = result["explanation"]
-                existing.calculated_at = datetime.now(timezone.utc)
-            else:
-                db.add(
-                    Recommendation(
-                        property_id=prop.id,
-                        stay_date=stay_date,
-                        actual_price=current.price if current else None,
-                        recommended_price=result["price"],
-                        explanation=result["explanation"],
-                    )
-                )
             count += 1
         db.commit()
     return count
