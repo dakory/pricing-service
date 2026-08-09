@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from statistics import median
 
 
 # Defaults are persisted through the pricing settings API and may be tuned without code changes.
@@ -70,9 +69,8 @@ def calculate_price(
     *,
     stay_date: date,
     current_date: date,
-    competitor_prices: list[float],
-    saved_market_price: float | None,
-    current_price: float | None,
+    price_anchor: dict | None,
+    available_competitor_count: int,
     minimum_competitor_count: int,
     minimum_price: float,
     maximum_price: float,
@@ -86,50 +84,48 @@ def calculate_price(
     if manual_override is not None:
         return {
             "price": float(manual_override),
-                "explanation": {
-                    "engine_version": "v3",
-                    "stay_date": stay_date.isoformat(),
-                    "price_source": "manual_override",
-                    "days_until_stay": days_until_stay,
-                    "manual_override": manual_override,
-                    "urgency_adjustment_enabled": configuration["urgency_adjustment_enabled"],
-                    "urgency_adjustment_applied": False,
-                    "final_price": float(manual_override),
-                },
+            "explanation": {
+                "engine_version": "v3",
+                "stay_date": stay_date.isoformat(),
+                "price_source": "manual_override",
+                "days_until_stay": days_until_stay,
+                "manual_override": manual_override,
+                "urgency_adjustment_enabled": configuration[
+                    "urgency_adjustment_enabled"
+                ],
+                "urgency_adjustment_applied": False,
+                "final_price": float(manual_override),
+            },
         }
 
     base_price_mode = configuration["base_price_mode"]
-    market_price_count = len(competitor_prices)
-    market_price_source: str | None = None
+    market_price_count = available_competitor_count
     market_price: float | None = None
-    if base_price_mode == "manual":
+    anchor_source = None
+    if price_anchor is not None:
+        anchor_source = str(price_anchor["source_type"])
+        source_price = float(price_anchor["source_price"])
+        if anchor_source == "airbnb_market_median":
+            market_price = source_price
+            base_price = (
+                source_price
+                * float(configuration["guest_to_host_price_factor"])
+                * float(configuration["market_positioning_factor"])
+            )
+            price_source = price_anchor.get("price_source", "saved_market")
+        elif anchor_source in {"manual_base", "hostex_fallback"}:
+            base_price = source_price
+            price_source = anchor_source
+        else:
+            raise ValueError(f"unsupported price anchor source: {anchor_source}")
+    elif base_price_mode == "manual":
         manual_base_price = configuration.get("manual_base_price")
         if manual_base_price is None:
             raise ValueError("manual_base_price is required for manual mode")
         base_price = float(manual_base_price)
         price_source = "manual_base"
-    elif base_price_mode == "market_median":
-        if market_price_count >= minimum_competitor_count:
-            market_price = float(median(competitor_prices))
-            market_price_source = "current_market"
-        elif saved_market_price is not None:
-            market_price = float(saved_market_price)
-            market_price_source = "saved_market"
-        elif current_price is not None:
-            # The current Hostex price is a fallback base, not a final price.
-            # It still goes through urgency, rounding, and bounds.
-            base_price = float(current_price)
-            price_source = "current_hostex_price"
-        else:
-            return None
-        if market_price is not None:
-            guest_to_host_factor = float(configuration["guest_to_host_price_factor"])
-            estimated_host_price_median = market_price * guest_to_host_factor
-            positioning_factor = float(configuration["market_positioning_factor"])
-            base_price = estimated_host_price_median * positioning_factor
-            price_source = market_price_source
     else:
-        raise ValueError(f"unsupported base_price_mode: {base_price_mode}")
+        return None
 
     urgency_adjustment = calculate_urgency_adjustment(
         days_until_stay, configuration
@@ -150,7 +146,14 @@ def calculate_price(
             "stay_date": stay_date.isoformat(),
             "days_until_stay": days_until_stay,
             "price_source": price_source,
+            "anchor_source": anchor_source or "manual_base",
+            "anchor_source_price": (
+                float(price_anchor["source_price"]) if price_anchor else float(base_price)
+            ),
             "available_competitor_count": market_price_count,
+            "anchor_competitor_count": int(
+                (price_anchor or {}).get("source_metadata", {}).get("competitor_count", 0)
+            ) or None,
             "minimum_competitor_count": minimum_competitor_count,
             "airbnb_guest_market_median": market_price,
             "guest_to_host_price_factor": guest_to_host_factor,

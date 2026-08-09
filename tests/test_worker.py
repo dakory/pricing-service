@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
-from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, PricingGroup, Property, Recommendation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, PriceAnchor, PricingGroup, Property, Recommendation, Run, RunKind, RunStatus, Setting
 from app.worker import create_scheduler
 
 
@@ -87,6 +87,9 @@ def test_shadow_optimizer_uses_exact_date_group_and_competitor_data():
         assert gap_day.explanation["available_competitor_count"] == 1
         assert gap_day.explanation["minimum_competitor_count"] == 1
         assert gap_day.explanation["engine_version"] == "v3"
+        anchor = db.scalar(select(PriceAnchor).where(PriceAnchor.property_id == prop.id, PriceAnchor.stay_date == date(2026, 7, 23)))
+        assert anchor.source_type == "airbnb_market_median"
+        assert anchor.source_price == Decimal("1200000")
 
 
 def test_property_pricing_settings_override_only_selected_global_values():
@@ -131,3 +134,30 @@ def test_property_pricing_settings_override_only_selected_global_values():
         assert effective["urgency_adjustments"] == [
             {"minimum_days": 0, "maximum_days": 7, "adjustment": -0.12},
         ]
+
+
+def test_hostex_fallback_anchor_is_fixed_across_runs():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with sessionmaker(engine, expire_on_commit=False)() as db:
+        group = PricingGroup(name="Fallback", competitor_urls=[], pricing_settings={})
+        db.add(group)
+        db.flush()
+        prop = Property(name="Fallback Villa", pricing_group_id=group.id, hostex_listing_id="fallback", active=True, min_price=Decimal("500000"), max_price=Decimal("2000000"), rounding_increment=50000, pricing_settings={})
+        db.add(prop)
+        db.flush()
+        db.add(HostexListing(property_id=prop.id, hostex_property_id=1, listing_id="fallback", channel_type="booking_site", raw={}))
+        stay_date = date(2026, 7, 22)
+        calendar_day = HostexCalendarDay(property_id=prop.id, listing_id="fallback", channel_type="booking_site", stay_date=stay_date, price=Decimal("1000000"), inventory=1, minimum_stay=1, raw={}, imported_at=datetime.now(timezone.utc))
+        db.add(calendar_day)
+        db.add(Setting(key="pricing_engine_v2", value={"minimum_competitor_count": 10, "urgency_adjustment_enabled": False}))
+        db.commit()
+
+        assert generate_price_recommendations(db, horizon_days=1, today=stay_date) == 1
+        anchor = db.scalar(select(PriceAnchor).where(PriceAnchor.property_id == prop.id, PriceAnchor.stay_date == stay_date))
+        assert anchor.source_type == "hostex_fallback"
+        calendar_day.price = Decimal("1500000")
+        db.commit()
+        assert generate_price_recommendations(db, horizon_days=1, today=stay_date) == 1
+        recommendation = db.scalar(select(Recommendation).where(Recommendation.property_id == prop.id, Recommendation.stay_date == stay_date))
+        assert recommendation.recommended_price == Decimal("1000000")

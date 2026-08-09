@@ -41,6 +41,7 @@ from app.models import (
     HostexCalendarDay,
     HostexListing,
     Override,
+    PriceAnchor,
     PricingGroup,
     Property,
     Recommendation,
@@ -56,6 +57,7 @@ from app.schemas import (
     CompetitorScrapeCreate,
     ModeUpdate,
     OverrideCreate,
+    PriceAnchorCreate,
     PricingConfiguration,
     PricingConfigurationOverride,
     PricingGroupCreate,
@@ -336,6 +338,87 @@ def delete_override(override_id: int, db: Session = Depends(get_database_session
     item = db.get(Override, override_id)
     if not item:
         raise HTTPException(404, "Override not found")
+    db.delete(item)
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/price-anchors", dependencies=[Depends(require_csrf)])
+def create_manual_price_anchor(
+    payload: PriceAnchorCreate, db: Session = Depends(get_database_session)
+):
+    """Create or replace manual base anchors for every date in a range."""
+
+    if not db.get(Property, payload.property_id):
+        raise HTTPException(404, "Property not found")
+    now = datetime.now(timezone.utc)
+    cursor = payload.start_date
+    count = 0
+    while cursor <= payload.end_date:
+        item = db.scalar(
+            select(PriceAnchor).where(
+                PriceAnchor.property_id == payload.property_id,
+                PriceAnchor.stay_date == cursor,
+            )
+        )
+        metadata = {"reason": payload.reason}
+        if item:
+            item.source_type = "manual_base"
+            item.source_price = payload.price
+            item.currency = "IDR"
+            item.source_metadata = metadata
+            item.updated_at = now
+        else:
+            db.add(
+                PriceAnchor(
+                    property_id=payload.property_id,
+                    stay_date=cursor,
+                    source_type="manual_base",
+                    source_price=payload.price,
+                    currency="IDR",
+                    source_metadata=metadata,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        count += 1
+        cursor += timedelta(days=1)
+    db.commit()
+    return {"count": count}
+
+
+@router.get("/price-anchors", dependencies=[Depends(require_session)])
+def list_price_anchors(
+    property_id: int | None = None, db: Session = Depends(get_database_session)
+):
+    """List persisted date-level price anchors."""
+
+    query = select(PriceAnchor).order_by(PriceAnchor.stay_date)
+    if property_id:
+        query = query.where(PriceAnchor.property_id == property_id)
+    return [
+        {
+            "id": item.id,
+            "property_id": item.property_id,
+            "stay_date": item.stay_date,
+            "source_type": item.source_type,
+            "source_price": item.source_price,
+            "currency": item.currency,
+            "source_metadata": item.source_metadata,
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+        }
+        for item in db.scalars(query)
+    ]
+
+
+@router.delete("/price-anchors/{anchor_id}", dependencies=[Depends(require_csrf)])
+def delete_price_anchor(anchor_id: int, db: Session = Depends(get_database_session)):
+    """Delete one date-level anchor so market fallback can be recalculated."""
+
+    item = db.get(PriceAnchor, anchor_id)
+    if not item:
+        raise HTTPException(404, "Price anchor not found")
     db.delete(item)
     db.commit()
     return Response(status_code=204)

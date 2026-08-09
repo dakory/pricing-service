@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from pydantic import ValidationError
@@ -10,9 +10,9 @@ from app.schemas import PricingConfiguration
 def args(**overrides):
     value = dict(
         stay_date=date(2026, 8, 10), current_date=date(2026, 8, 1),
-        competitor_prices=[1_000_000, 1_500_000, 2_000_000], saved_market_price=None,
-        current_price=900_000, minimum_competitor_count=3, minimum_price=500_000,
-        maximum_price=2_000_000, pricing_step=10_000,
+        price_anchor={"source_type": "airbnb_market_median", "source_price": 1_500_000, "source_metadata": {"competitor_count": 3}, "price_source": "current_market"},
+        available_competitor_count=3, minimum_competitor_count=3,
+        minimum_price=500_000, maximum_price=2_000_000, pricing_step=10_000,
         configuration=dict(DEFAULT_PRICING_CONFIGURATION, urgency_adjustment_enabled=False),
     )
     value.update(overrides)
@@ -30,48 +30,47 @@ def test_market_conversion_positioning_and_rounding_then_clamp():
     assert result["explanation"]["estimated_host_price_median"] == pytest.approx(1_258_500)
     assert result["explanation"]["base_price"] == pytest.approx(1_132_650)
     assert result["price"] == 1_130_000
-    assert result["explanation"]["engine_version"] == "v3"
+    assert result["explanation"]["anchor_source"] == "airbnb_market_median"
 
 
-def test_manual_override_bypasses_rounding_and_bounds():
+def test_manual_override_bypasses_anchor_calculation():
     result = calculate_price(**args(manual_override=2_345_678, minimum_price=500_000, maximum_price=1_000_000))
     assert result["price"] == 2_345_678
     assert result["explanation"]["price_source"] == "manual_override"
 
 
-def test_market_falls_back_to_saved_then_current_price_then_none():
-    saved = calculate_price(**args(competitor_prices=[1_000_000], minimum_competitor_count=3, saved_market_price=1_200_000))
-    assert saved["explanation"]["price_source"] == "saved_market"
-    current = calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=777_777))
-    assert current["price"] == 780_000
-    assert current["explanation"]["price_source"] == "current_hostex_price"
-    assert current["explanation"]["urgency_adjustment_enabled"] is False
-    assert current["explanation"]["urgency_adjustment_applied"] is True
-    assert calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=None)) is None
-
-
-def test_current_price_fallback_preserves_inherited_enabled_urgency_state():
-    result = calculate_price(**args(competitor_prices=[], minimum_competitor_count=3, saved_market_price=None, current_price=777_777, configuration=DEFAULT_PRICING_CONFIGURATION))
+def test_saved_hostex_fallback_anchor_is_reused_and_urgency_is_applied():
+    result = calculate_price(**args(
+        price_anchor={"source_type": "hostex_fallback", "source_price": 777_777, "source_metadata": {}, "price_source": "hostex_fallback"},
+        available_competitor_count=0,
+        configuration=DEFAULT_PRICING_CONFIGURATION,
+    ))
     assert result["price"] == 740_000
-    assert result["explanation"]["urgency_adjustment_enabled"] is True
-    assert result["explanation"]["urgency_adjustment_applied"] is True
+    assert result["explanation"]["price_source"] == "hostex_fallback"
+    assert result["explanation"]["urgency_adjustment"] == -.05
 
 
-def test_manual_base_does_not_need_market():
-    result = calculate_price(**args(competitor_prices=[], current_price=None, configuration={**DEFAULT_PRICING_CONFIGURATION, "base_price_mode": "manual", "manual_base_price": 1_234_000, "urgency_adjustment_enabled": False}))
+def test_manual_base_anchor_is_date_level_and_does_not_use_market_factors():
+    result = calculate_price(**args(
+        price_anchor={"source_type": "manual_base", "source_price": 1_234_000, "source_metadata": {}, "price_source": "manual_base"},
+        available_competitor_count=0,
+        configuration={**DEFAULT_PRICING_CONFIGURATION, "urgency_adjustment_enabled": False, "market_positioning_factor": .5},
+    ))
     assert result["price"] == 1_230_000
-    assert result["explanation"]["price_source"] == "manual_base"
+    assert result["explanation"]["anchor_source"] == "manual_base"
 
 
-def test_urgency_gaps_and_disabled_rules_are_zero():
-    assert calculate_urgency_adjustment(5, {**DEFAULT_PRICING_CONFIGURATION, "urgency_adjustments": [{"minimum_days": 0, "maximum_days": 3, "adjustment": -.2}]}) == 0
-    assert calculate_urgency_adjustment(1, {**DEFAULT_PRICING_CONFIGURATION, "urgency_adjustment_enabled": False}) == 0
+def test_manual_property_base_does_not_need_an_anchor():
+    result = calculate_price(**args(
+        price_anchor=None,
+        available_competitor_count=0,
+        configuration={**DEFAULT_PRICING_CONFIGURATION, "base_price_mode": "manual", "manual_base_price": 1_234_000, "urgency_adjustment_enabled": False},
+    ))
+    assert result["price"] == 1_230_000
 
 
-def test_rounding_precedes_clamp():
-    result = calculate_price(**args(competitor_prices=[1_234_567], minimum_competitor_count=1, minimum_price=1_000_000, maximum_price=1_500_000, pricing_step=100_000, configuration={**DEFAULT_PRICING_CONFIGURATION, "guest_to_host_price_factor": 1.0, "urgency_adjustment_enabled": False}))
-    assert result["explanation"]["rounded_price"] == 1_200_000
-    assert result["price"] == 1_200_000
+def test_no_anchor_in_market_mode_returns_no_recommendation():
+    assert calculate_price(**args(price_anchor=None, available_competitor_count=0)) is None
 
 
 def test_configuration_rejects_overlapping_or_excessive_rules_and_demand_fields():

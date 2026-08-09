@@ -14,7 +14,7 @@ from app.competitor_scrapes import start_collection_run
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, MarketPriceSnapshot, Override, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, Override, PriceAnchor, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
 from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, merge_pricing_configuration
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
@@ -215,13 +215,13 @@ def generate_price_recommendations(
         observations = latest_competitor_observations(
             db, prop.pricing_group, today, horizon_end
         )
-        saved_snapshots = {
+        saved_anchors = {
             item.stay_date: item
             for item in db.scalars(
-                select(MarketPriceSnapshot).where(
-                    MarketPriceSnapshot.property_id == prop.id,
-                    MarketPriceSnapshot.stay_date >= today,
-                    MarketPriceSnapshot.stay_date < horizon_end,
+                select(PriceAnchor).where(
+                    PriceAnchor.property_id == prop.id,
+                    PriceAnchor.stay_date >= today,
+                    PriceAnchor.stay_date < horizon_end,
                 )
             ).all()
         }
@@ -241,38 +241,74 @@ def generate_price_recommendations(
             ]
             override = active_override(db, prop.id, stay_date)
             current = calendar.get(stay_date)
+            anchor = saved_anchors.get(stay_date)
             if (
                 configuration["base_price_mode"] == "market_median"
                 and override is None
+                and (anchor is None or anchor.source_type != "manual_base")
                 and len(available_prices) >= minimum_competitor_count
             ):
                 raw_median = float(median(available_prices))
-                snapshot = saved_snapshots.get(stay_date)
-                if snapshot is None:
-                    snapshot = MarketPriceSnapshot(
+                now = datetime.now(timezone.utc)
+                if anchor is None:
+                    anchor = PriceAnchor(
                         property_id=prop.id,
                         stay_date=stay_date,
-                        guest_market_median=raw_median,
-                        competitor_count=len(available_prices),
-                        observed_at=datetime.now(timezone.utc),
+                        source_type="airbnb_market_median",
+                        source_price=raw_median,
+                        currency="IDR",
+                        source_metadata={"competitor_count": len(available_prices)},
+                        created_at=now,
+                        updated_at=now,
                     )
-                    db.add(snapshot)
-                    saved_snapshots[stay_date] = snapshot
+                    db.add(anchor)
+                    saved_anchors[stay_date] = anchor
                 else:
-                    snapshot.guest_market_median = raw_median
-                    snapshot.competitor_count = len(available_prices)
-                    snapshot.observed_at = datetime.now(timezone.utc)
-            saved_market = saved_snapshots.get(stay_date)
+                    anchor.source_type = "airbnb_market_median"
+                    anchor.source_price = raw_median
+                    anchor.source_metadata = {"competitor_count": len(available_prices)}
+                    anchor.updated_at = now
+            elif (
+                configuration["base_price_mode"] == "market_median"
+                and override is None
+                and anchor is None
+                and current is not None
+                and current.price is not None
+            ):
+                now = datetime.now(timezone.utc)
+                anchor = PriceAnchor(
+                    property_id=prop.id,
+                    stay_date=stay_date,
+                    source_type="hostex_fallback",
+                    source_price=current.price,
+                    currency="IDR",
+                    source_metadata={"hostex_imported_at": imported_at.isoformat() if imported_at else None},
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(anchor)
+                saved_anchors[stay_date] = anchor
+            anchor_payload = None
+            if anchor is not None and (
+                configuration["base_price_mode"] == "market_median"
+                or anchor.source_type == "manual_base"
+            ):
+                anchor_payload = {
+                    "source_type": anchor.source_type,
+                    "source_price": float(anchor.source_price),
+                    "source_metadata": anchor.source_metadata or {},
+                    "price_source": (
+                        "current_market"
+                        if anchor.source_type == "airbnb_market_median"
+                        and len(available_prices) >= minimum_competitor_count
+                        else anchor.source_type
+                    ),
+                }
             result = calculate_price(
                 stay_date=stay_date,
                 current_date=today,
-                competitor_prices=available_prices,
-                saved_market_price=(
-                    float(saved_market.guest_market_median)
-                    if saved_market is not None
-                    else None
-                ),
-                current_price=float(current.price) if current and current.price is not None else None,
+                price_anchor=anchor_payload,
+                available_competitor_count=len(available_prices),
                 minimum_competitor_count=minimum_competitor_count,
                 minimum_price=float(prop.min_price),
                 maximum_price=float(prop.max_price),
