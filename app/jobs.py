@@ -200,8 +200,22 @@ def latest_competitor_observations(
 
     if not pricing_group.competitor_urls:
         return {}
-    observations = db.scalars(
-        select(CompetitorObservation)
+    latest_calendar: dict[tuple[date, str], CompetitorObservation] = {}
+    latest_price: dict[tuple[date, str], object] = {}
+    partition = (
+        CompetitorObservation.stay_date,
+        CompetitorListing.canonical_url,
+    )
+    ranked_calendar = (
+        select(
+            CompetitorObservation.stay_date.label("stay_date"),
+            CompetitorListing.canonical_url.label("canonical_url"),
+            CompetitorObservation.bookable.label("bookable"),
+            CompetitorObservation.price.label("price"),
+            func.row_number()
+            .over(partition_by=partition, order_by=CompetitorObservation.scraped_at.desc())
+            .label("row_number"),
+        )
         .join(CompetitorListing)
         .where(
             CompetitorListing.pricing_group_id == pricing_group.id,
@@ -209,22 +223,45 @@ def latest_competitor_observations(
             CompetitorObservation.stay_date >= start,
             CompetitorObservation.stay_date < horizon_end,
         )
-        .order_by(CompetitorObservation.scraped_at.desc())
-    ).all()
-    latest_calendar: dict[tuple[date, str], CompetitorObservation] = {}
-    latest_price: dict[tuple[date, str], object] = {}
-    for observation in observations:
+        .subquery()
+    )
+    for row in db.execute(
+        select(ranked_calendar).where(ranked_calendar.c.row_number == 1)
+    ).mappings():
         key = (
-            observation.stay_date,
-            observation.competitor_listing.canonical_url,
+            row["stay_date"],
+            row["canonical_url"],
         )
-        latest_calendar.setdefault(key, observation)
-        if observation.price is not None:
-            latest_price.setdefault(key, observation.price)
+        latest_calendar[key] = row
+
+    ranked_prices = (
+        select(
+            CompetitorObservation.stay_date.label("stay_date"),
+            CompetitorListing.canonical_url.label("canonical_url"),
+            CompetitorObservation.price.label("price"),
+            func.row_number()
+            .over(partition_by=partition, order_by=CompetitorObservation.scraped_at.desc())
+            .label("row_number"),
+        )
+        .join(CompetitorListing)
+        .where(
+            CompetitorListing.pricing_group_id == pricing_group.id,
+            CompetitorListing.canonical_url.in_(pricing_group.competitor_urls),
+            CompetitorObservation.stay_date >= start,
+            CompetitorObservation.stay_date < horizon_end,
+            CompetitorObservation.price.is_not(None),
+        )
+        .subquery()
+    )
+    for row in db.execute(
+        select(ranked_prices).where(ranked_prices.c.row_number == 1)
+    ).mappings():
+        latest_price[(row["stay_date"], row["canonical_url"])] = row["price"]
+
     latest: dict[date, dict[str, CompetitorMarketObservation]] = {}
     for (stay_date, url), observation in latest_calendar.items():
         latest.setdefault(stay_date, {})[url] = CompetitorMarketObservation(
-            bookable=observation.bookable,
+            bookable=observation["bookable"],
             price=latest_price.get((stay_date, url)),
         )
     return latest
