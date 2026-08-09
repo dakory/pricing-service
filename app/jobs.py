@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -44,6 +44,10 @@ def serialized_run(db: Session, kind: RunKind):
     run = Run(kind=kind, status=RunStatus.running)
     db.add(run)
     db.commit()
+    # Capture the primary key while the instance is definitely attached and
+    # unexpired.  A failed flush can leave the session in a pending-rollback
+    # state, making attribute access on ``run`` unsafe in the exception path.
+    run_id = run.id
     try:
         yield run
         if run.status == RunStatus.running:
@@ -51,13 +55,24 @@ def serialized_run(db: Session, kind: RunKind):
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
     except Exception as exc:
-        run_id = run.id
         db.rollback()
-        run = db.get(Run, run_id)
-        run.status = RunStatus.failed
-        run.error = str(exc)
-        run.finished_at = datetime.now(timezone.utc)
-        db.commit()
+        # Record failure using a fresh SQL statement after rollback.  This
+        # avoids touching the expired ORM instance that caused the original
+        # exception and guarantees that callers never see a run stuck at
+        # ``running`` merely because its work failed.
+        try:
+            db.execute(
+                update(Run)
+                .where(Run.id == run_id)
+                .values(
+                    status=RunStatus.failed,
+                    error=str(exc),
+                    finished_at=datetime.now(timezone.utc),
+                )
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
         raise
     finally:
         if lock_connection is not None:

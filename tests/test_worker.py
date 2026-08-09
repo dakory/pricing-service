@@ -37,6 +37,26 @@ def test_failed_serialized_job_rolls_back_partial_data_and_records_failure():
         assert run.error == "import failed"
 
 
+def test_failed_flush_records_run_failure_without_masking_original_error():
+    """A database flush failure must not leave the run stuck as running."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with sessionmaker(engine, expire_on_commit=False)() as db:
+        with pytest.raises(Exception, match="UNIQUE constraint failed"):
+            with serialized_run(db, RunKind.optimize):
+                db.add_all(
+                    [
+                        Setting(key="duplicate", value={"attempt": 1}),
+                        Setting(key="duplicate", value={"attempt": 2}),
+                    ]
+                )
+                db.flush()
+        run = db.scalar(select(Run))
+        assert run.status == RunStatus.failed
+        assert "UNIQUE constraint failed" in run.error
+
+
 def test_shadow_optimizer_uses_exact_date_group_and_competitor_data():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
