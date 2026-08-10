@@ -6,7 +6,7 @@ from app.database import Base
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
+from app.jobs import cleanup_competitor_scrape_history, generate_price_recommendations, pricing_configuration, serialized_run
 from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, PriceAnchor, PricingGroup, Property, Recommendation, Run, RunKind, RunStatus, Setting
 from app.worker import create_scheduler
 
@@ -55,6 +55,44 @@ def test_failed_flush_records_run_failure_without_masking_original_error():
         run = db.scalar(select(Run))
         assert run.status == RunStatus.failed
         assert "UNIQUE constraint failed" in run.error
+
+
+def test_cleanup_competitor_scrape_history_removes_old_artifacts_only():
+    """Retention removes scrape details but keeps dated observations."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with sessionmaker(engine, expire_on_commit=False)() as db:
+        old_run = Run(kind=RunKind.scrape, status=RunStatus.succeeded,
+                      started_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        db.add(old_run)
+        db.flush()
+        group = PricingGroup(name="Retention group", pricing_settings={})
+        db.add(group)
+        db.flush()
+        listing = CompetitorListing(
+            pricing_group_id=group.id,
+            canonical_url="https://www.airbnb.com/rooms/retention",
+            external_listing_id="retention",
+        )
+        db.add(listing)
+        db.flush()
+        db.add(CompetitorObservation(
+            competitor_listing_id=listing.id,
+            scrape_run_id=old_run.id,
+            stay_date=date(2026, 8, 10),
+            price=Decimal("1000000"),
+            bookable=True,
+            scraped_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            parser_version="test",
+        ))
+        db.commit()
+        assert cleanup_competitor_scrape_history(
+            db, retention_days=90, now=datetime(2026, 8, 10, tzinfo=timezone.utc)
+        ) == 1
+        assert db.get(Run, old_run.id) is None
+        observation = db.query(CompetitorObservation).one()
+        assert observation.scrape_run_id is None
 
 
 def test_shadow_optimizer_uses_exact_date_group_and_competitor_data():

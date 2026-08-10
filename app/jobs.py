@@ -14,7 +14,7 @@ from app.competitor_scrapes import start_collection_run
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import CompetitorListing, CompetitorObservation, HostexCalendarDay, HostexListing, Override, PriceAnchor, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorDateError, CompetitorListing, CompetitorObservation, CompetitorPriceTarget, CompetitorScrapeBatch, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PriceAnchor, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
 from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, merge_pricing_configuration
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
@@ -562,10 +562,50 @@ def scheduled_competitor_collection(collection_mode: str) -> dict[str, int]:
     return result
 
 
+def cleanup_competitor_scrape_history(
+    db: Session, retention_days: int, now: datetime | None = None
+) -> int:
+    """Delete old scrape artifacts while retaining dated observations."""
+
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=retention_days)
+    old_run_ids = select(Run.id).where(
+        Run.kind == RunKind.scrape,
+        Run.started_at < cutoff,
+        Run.status != RunStatus.running,
+    )
+    deleted = 0
+    for model in (
+        CompetitorDateError,
+        CompetitorPriceTarget,
+        CompetitorStayQuote,
+        CompetitorScrapeBatch,
+    ):
+        result = db.execute(
+            delete(model).where(model.scrape_run_id.in_(old_run_ids))
+        )
+        deleted += result.rowcount or 0
+    # Observations are retained for pricing, but no longer need to point at a
+    # run whose detailed artifacts have been removed.
+    db.execute(
+        update(CompetitorObservation)
+        .where(CompetitorObservation.scrape_run_id.in_(old_run_ids))
+        .values(scrape_run_id=None)
+    )
+    deleted += db.execute(delete(Run).where(Run.id.in_(old_run_ids))).rowcount or 0
+    db.commit()
+    return deleted
+
+
 def daily_competitor_collection() -> dict[str, int]:
     """Queue daily calendar and precise-price collection runs."""
 
-    return scheduled_competitor_collection("precise")
+    result = scheduled_competitor_collection("precise")
+    settings = get_settings()
+    with SessionLocal() as db:
+        result["pruned"] = cleanup_competitor_scrape_history(
+            db, settings.competitor_scrape_retention_days
+        )
+    return result
 
 
 def monthly_competitor_collection() -> dict[str, int]:
