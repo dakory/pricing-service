@@ -4,6 +4,7 @@
 import React from "react";
 import ReactDOM from "react-dom";
 import { Input, IconButton, Select, Button, Toast, Switch, InputWithSelectField } from "./design-system";
+import { CalendarLoadingSkeleton } from "./CalendarLoadingSkeleton";
 const csrfToken=()=>decodeURIComponent(document.cookie.split('; ').find(row=>row.startsWith('pricing_csrf='))?.split('=')[1]||'');
 // These implementations mirror the corresponding design-system sources in
 // nicer.homes_design_system/components. They are kept local because the
@@ -57,7 +58,7 @@ function genDays(n){
 const start=new Date(2026,7,28);
 return Array.from({length:n},(_,i)=>{const d=new Date(start);d.setDate(start.getDate()+i);return d;});
 }
-function monthLabel(d){return d.toLocaleDateString('en-US',{month:'long',year:'numeric'});}
+function monthLabel(d){return d.toLocaleDateString('en-US',{month:'long',year:'numeric',timeZone:'UTC'});}
 function normalizeUrgencyRules(value){
   if(Array.isArray(value)) return value.filter(rule=>rule&&typeof rule==='object');
   if(value&&typeof value==='object'){
@@ -69,6 +70,9 @@ function normalizeUrgencyRules(value){
 function effectiveSetting(value){
   return value&&typeof value==='object'&&Object.prototype.hasOwnProperty.call(value,'value')?value.value:value;
 }
+function calendarDate(value){return new Date(`${value}T00:00:00Z`);}
+function dateString(value){return value.toISOString().slice(0,10);}
+function shiftDate(value,days){const next=new Date(value);next.setUTCDate(next.getUTCDate()+days);return next;}
 function Pricing(){
 const [days,setDays]=React.useState([]);
 const [listings,setListings]=React.useState([]);
@@ -77,8 +81,14 @@ const [calendarRecords,setCalendarRecords]=React.useState({});
 const [globalSettings,setGlobalSettings]=React.useState({minComp:'10',positioning:'1',guestToHost:'0.839',minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:'on',method:'median',manualBase:'',rules:[{f:0,t:3,d:-0.15},{f:4,t:7,d:-0.10},{f:8,t:14,d:-0.05},{f:15,t:30,d:-0.02}]});
 const [pricingGroups,setPricingGroups]=React.useState([]);
 const [searchQuery,setSearchQuery]=React.useState('');
-const loadCalendar=React.useCallback(()=>{const start=new Date(Date.now()-7*86400000).toISOString().slice(0,10);const end=new Date(Date.now()+43*86400000).toISOString().slice(0,10);return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties){setDays([]);setListings([]);return;}const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setCalendarRecords(Object.fromEntries((payload.days||[]).map(d=>[`${d.property_id}:${d.stay_date}`,d])));setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({id:p.id,name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),groupId:p.pricing_group_id,group:p.pricing_group_name||('Pricing group '+p.pricing_group_id),prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));});},[]);
-React.useEffect(()=>{let active=true;Promise.all([loadCalendar(),fetch('/api/settings/pricing').then(r=>r.ok?r.json():null),fetch('/api/pricing-groups').then(r=>r.ok?r.json():[])]).then(([,settings,groups])=>{if(active&&settings){setGlobalSettings({minComp:String(settings.minimum_competitor_count),positioning:String(settings.market_positioning_factor),guestToHost:String(settings.guest_to_host_price_factor),minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:settings.urgency_adjustment_enabled?'on':'off',method:settings.base_price_mode==='manual'?'manual':'median',manualBase:settings.manual_base_price?String(settings.manual_base_price):'',rules:normalizeUrgencyRules(settings.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment}))});}if(active){setPricingGroups(groups||[]);setGroupData(Object.fromEntries((groups||[]).map(g=>[g.name,{name:g.name,minComp:g.pricing_settings?.minimum_competitor_count?String(g.pricing_settings.minimum_competitor_count):'',urls:(g.competitor_urls||[]).join('\n')}])));}}).catch(()=>{}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[loadCalendar]);
+const calendarRangeRef=React.useRef({start:null,end:null});
+const loadingRangeRef=React.useRef(null);
+const loadingDatesRef=React.useRef(new Set());
+const pendingLeftCompensationRef=React.useRef(0);
+const [loadingDates,setLoadingDates]=React.useState([]);
+const loadCalendarRange=React.useCallback((startValue,endValue)=>{const start=dateString(startValue);const end=dateString(endValue);const requestKey=`${start}:${end}`;if(loadingRangeRef.current===requestKey)return Promise.resolve();loadingRangeRef.current=requestKey;return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties)return;calendarRangeRef.current={start:calendarRangeRef.current.start&&calendarRangeRef.current.start<start?calendarRangeRef.current.start:start,end:calendarRangeRef.current.end&&calendarRangeRef.current.end>end?calendarRangeRef.current.end:end};setCalendarRecords(previous=>{const merged={...previous};(payload.days||[]).forEach(record=>{merged[`${record.property_id}:${record.stay_date}`]=record;});const records=Object.values(merged);const dates=[...new Set(records.map(record=>record.stay_date))].sort();setDays(dates.map(calendarDate));setListings(payload.properties.map((property,index)=>{const propertyRecords=records.filter(record=>String(record.property_id)===String(property.id));const first=propertyRecords.find(record=>record.current_price!=null);return {id:property.id,name:property.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][index%3],base:Number(first?.current_price||0),groupId:property.pricing_group_id,group:property.pricing_group_name||('Pricing group '+property.pricing_group_id),prices:Object.fromEntries(propertyRecords.map(record=>[record.stay_date,Number(record.current_price||0)]))};}));return merged;});}).finally(()=>{loadingRangeRef.current=null;});},[]);
+const initialLoad=React.useCallback(()=>loadCalendarRange(shiftDate(new Date(),-7),shiftDate(new Date(),43)),[loadCalendarRange]);
+React.useEffect(()=>{let active=true;Promise.all([initialLoad(),fetch('/api/settings/pricing').then(r=>r.ok?r.json():null),fetch('/api/pricing-groups').then(r=>r.ok?r.json():[])]).then(([,settings,groups])=>{if(active&&settings){setGlobalSettings({minComp:String(settings.minimum_competitor_count),positioning:String(settings.market_positioning_factor),guestToHost:String(settings.guest_to_host_price_factor),minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:settings.urgency_adjustment_enabled?'on':'off',method:settings.base_price_mode==='manual'?'manual':'median',manualBase:settings.manual_base_price?String(settings.manual_base_price):'',rules:normalizeUrgencyRules(settings.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment}))});}if(active){setPricingGroups(groups||[]);setGroupData(Object.fromEntries((groups||[]).map(g=>[g.name,{name:g.name,minComp:g.pricing_settings?.minimum_competitor_count?String(g.pricing_settings.minimum_competitor_count):'',urls:(g.competitor_urls||[]).join('\n')}])));}}).catch(()=>{}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[initialLoad]);
 const visibleListings=listings.filter(l=>l.name.toLowerCase().includes(searchQuery.trim().toLowerCase()));
 const groupOrder=[];visibleListings.forEach(l=>{if(!groupOrder.includes(l.group))groupOrder.push(l.group);});
 let rowCursor=3;let propCursor=0;
@@ -127,22 +137,26 @@ const saveProperty=(name)=>{
  if(pd.minIDR&&pd.maxIDR&&min>max){setToast('Minimum price cannot exceed maximum price.');return;}
  const selectedGroup=pricingGroups.find(g=>g.name===(groupOverrides[name]||item.group));
  const payload={pricing_group_id:selectedGroup?.id||item.groupId,min_price:min,max_price:max,rounding_increment:Number(String(pd.step||'').replace(/,/g,'')),pricing_settings:{base_price_mode:pd.method==='median'?'market_median':'manual',manual_base_price:pd.manualBase?Number(String(pd.manualBase).replace(/,/g,'')):null,market_positioning_factor:Number(pd.positioning),minimum_competitor_count:Number(pd.minComp),urgency_adjustment_enabled:pd.useUrgency==='on',urgency_adjustments:pd.rules.map(r=>({minimum_days:r.f,maximum_days:r.t,adjustment:Number(r.d)}))}};
- fetch('/api/properties/'+item.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(payload)}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save property');setToast('Property settings saved.');setSelected(null);return loadCalendar();}).catch(e=>setToast(e.message));
+ fetch('/api/properties/'+item.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(payload)}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save property');setToast('Property settings saved.');setSelected(null);return initialLoad();}).catch(e=>setToast(e.message));
 };
 const [groupData,setGroupData]=React.useState({});
 const defaultGroupUrls=(gname)=>Array.from({length:9},(_,i)=>`https://www.airbnb.com/rooms/${1500000000000+Math.abs(Math.round(Math.sin(gname.length+i*3.1)*99999999999))}`).join('\n');
 const activeGroupName=selected&&selected.startsWith('group:')?selected.slice(6):null;
 const groupFor=(gname)=>groupData[gname]||{name:gname,minComp:'',urls:defaultGroupUrls(gname)};
 const setGroupField=(gname,field,val)=>setGroupData(d=>({...d,[gname]:{...groupFor(gname),[field]:val}}));
-const saveGroup=(gname)=>{const gd=groupFor(gname);const group=pricingGroups.find(g=>g.name===gname);fetch('/api/pricing-groups/'+group.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({name:gd.name,competitor_urls:gd.urls.split('\n').map(u=>u.trim()).filter(Boolean),pricing_settings:gd.minComp?{minimum_competitor_count:Number(gd.minComp)}:{}})}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save pricing group');setToast('Pricing group saved.');setSelected(null);const groups=await fetch('/api/pricing-groups').then(x=>x.json());setPricingGroups(groups);return loadCalendar();}).catch(e=>setToast(e.message));};
+const saveGroup=(gname)=>{const gd=groupFor(gname);const group=pricingGroups.find(g=>g.name===gname);fetch('/api/pricing-groups/'+group.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({name:gd.name,competitor_urls:gd.urls.split('\n').map(u=>u.trim()).filter(Boolean),pricing_settings:gd.minComp?{minimum_competitor_count:Number(gd.minComp)}:{}})}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save pricing group');setToast('Pricing group saved.');setSelected(null);const groups=await fetch('/api/pricing-groups').then(x=>x.json());setPricingGroups(groups);return initialLoad();}).catch(e=>setToast(e.message));};
 const scrollRef=React.useRef(null);
-const [canLeft,setCanLeft]=React.useState(false);
+// Keep the navigation affordances visible during the first layout pass. The
+// scroll measurement updates their enabled state after the calendar mounts,
+// without making the controls appear/disappear during data hydration.
+const [canLeft,setCanLeft]=React.useState(true);
 const [canRight,setCanRight]=React.useState(true);
+const suppressInitialLeftPrefetch=React.useRef(false);
 const [currentMonth,setCurrentMonth]=React.useState(0);
 const colWidth=96;
 const labelColWidth=280;
 const months=[];
-days.forEach((d,i)=>{if(i===0||d.getDate()===1)months.push({label:monthLabel(d),start:i});});
+days.forEach((d,i)=>{if(i===0||d.getUTCDate()===1)months.push({label:monthLabel(d),start:i});});
 const updateHoverFromPointer=(x,y)=>{
 const el=document.elementFromPoint(x,y);
 const cellEl=el&&el.closest&&el.closest('[data-cell-key]');
@@ -158,20 +172,66 @@ const placeBelow=rect.top<320;
 const left=Math.min(Math.max(rect.left+rect.width/2,140),window.innerWidth-140);
 setTooltipData({left,top:placeBelow?rect.bottom+8:rect.top-8,placeBelow,diff,cur,breakdown});
 };
+const loadMoreDates=(direction)=>{
+  const el=scrollRef.current;
+  if(!el||loadingRangeRef.current||!calendarRangeRef.current.start||!calendarRangeRef.current.end)return;
+  const start=calendarDate(calendarRangeRef.current.start);
+  const end=calendarDate(calendarRangeRef.current.end);
+  const rangeStart=direction==='right'?shiftDate(end,1):shiftDate(start,-30);
+  const rangeEnd=direction==='right'?shiftDate(end,30):shiftDate(start,-1);
+  const requestedDates=Array.from({length:31},(_,index)=>dateString(shiftDate(rangeStart,index))).filter(value=>value<=dateString(rangeEnd));
+  loadingDatesRef.current=new Set([...loadingDatesRef.current,...requestedDates]);
+  setLoadingDates(Array.from(loadingDatesRef.current));
+  if(direction==='left')pendingLeftCompensationRef.current+=requestedDates.length*colWidth;
+  setDays(previous=>[...new Set([...previous.map(dateString),...requestedDates])].sort().map(calendarDate));
+  const request=loadCalendarRange(rangeStart,rangeEnd);
+  request.finally(()=>{requestedDates.forEach(value=>loadingDatesRef.current.delete(value));setLoadingDates(Array.from(loadingDatesRef.current));});
+};
 const updateScrollState=()=>{
 const el=scrollRef.current;if(!el)return;
 updateHoverFromPointer(lastPointer.current.x,lastPointer.current.y);
 setCanLeft(el.scrollLeft>4);
 setCanRight(el.scrollLeft<el.scrollWidth-el.clientWidth-4);
+ const prefetchThreshold=colWidth*3;
+ if(el.scrollLeft<prefetchThreshold&&!suppressInitialLeftPrefetch.current)loadMoreDates('left');
+ if(el.scrollLeft>el.scrollWidth-el.clientWidth-prefetchThreshold)loadMoreDates('right');
 const visibleCol=Math.round((el.scrollLeft)/colWidth);
 let mi=0;
 months.forEach((m,idx)=>{if(visibleCol>=m.start)mi=idx;});
 setCurrentMonth(mi);
 };
 React.useEffect(()=>{updateScrollState();},[]);
+React.useLayoutEffect(()=>{
+  if(!pendingLeftCompensationRef.current||!scrollRef.current)return;
+  scrollRef.current.scrollLeft+=pendingLeftCompensationRef.current;
+  pendingLeftCompensationRef.current=0;
+},[days.length]);
 const scrollBy=(dir)=>{const el=scrollRef.current;if(!el)return;el.scrollBy({left:dir*colWidth*4,behavior:'smooth'});setTimeout(updateScrollState,300)};
 const scrollToCol=(colIdx)=>{const el=scrollRef.current;if(!el)return;el.scrollTo({left:colIdx*colWidth,behavior:'smooth'});setTimeout(updateScrollState,350)};
-const scrollToToday=()=>scrollToCol(0);
+const alignToday=(behavior='smooth')=>{
+const el=scrollRef.current;if(!el)return false;
+const todayHeader=el.querySelector(`[data-calendar-date="${dateString(new Date())}"]`);if(!todayHeader)return false;
+const containerRect=el.getBoundingClientRect();
+const headerRect=todayHeader.getBoundingClientRect();
+const targetLeft=Math.max(0,el.scrollLeft+headerRect.left-(containerRect.left+labelColWidth));
+el.scrollTo({left:targetLeft,behavior});
+return true;
+};
+const scrollToToday=()=>{
+if(!alignToday('smooth'))return;
+setTimeout(updateScrollState,350);
+};
+const initialTodayScrollDone=React.useRef(false);
+React.useEffect(()=>{
+if(calendarLoading||!days.length||initialTodayScrollDone.current)return;
+initialTodayScrollDone.current=true;
+suppressInitialLeftPrefetch.current=true;
+requestAnimationFrame(()=>{
+if(!alignToday('auto'))return;
+updateScrollState();
+setTimeout(()=>{suppressInitialLeftPrefetch.current=false;},600);
+});
+},[calendarLoading,days.length]);
 const price=(base,i)=>Math.round((base+(Math.sin(i*1.7)*base*0.06)+(i%5===0?base*0.18:0))/1000)*1000;
 const fmtRp=n=>'Rp '+Math.round(n).toLocaleString('id-ID');
 const buildBreakdown=(base,i,li,cur)=>{
@@ -205,7 +265,7 @@ setBusy(key);
 const paths={fetch:'/api/imports/hostex/booking-site',generate:'/api/pricing/run',apply:'/api/pricing/publish'};
 const path=paths[key];
 if(!path){setTimeout(()=>{setBusy(null);setToast(label);},500);return;}
-fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrfToken()}}).then(async response=>{const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.detail||label+' failed');setBusy(null);setToast(label);if(key==='fetch')setLastSync(s=>({...s,fetch:'Just now'}));if(key==='generate')setLastSync(s=>({...s,generate:'Just now'}));if(key==='apply')setLastSync(s=>({...s,apply:'Just now'}));return loadCalendar();}).then(()=>setTimeout(()=>setToast(null),2600)).catch(error=>{setBusy(null);setToast(error.message);});
+fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrfToken()}}).then(async response=>{const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.detail||label+' failed');setBusy(null);setToast(label);if(key==='fetch')setLastSync(s=>({...s,fetch:'Just now'}));if(key==='generate')setLastSync(s=>({...s,generate:'Just now'}));if(key==='apply')setLastSync(s=>({...s,apply:'Just now'}));return initialLoad();}).then(()=>setTimeout(()=>setToast(null),2600)).catch(error=>{setBusy(null);setToast(error.message);});
 };
 const handleCellClick=(propIndex,dayIndex)=>{
 if(!rangeAnchor){
@@ -228,16 +288,20 @@ selectedListings.push(l);
 const nDates=(rangeSelection.maxDay-rangeSelection.minDay+1)*(rangeSelection.maxProp-rangeSelection.minProp+1);
 const start=days[rangeSelection.minDay].toISOString().slice(0,10); const end=days[rangeSelection.maxDay].toISOString().slice(0,10);
 const path=rangeActionMode==='anchor'?'/api/price-anchors':'/api/overrides';
-Promise.all(selectedListings.map(l=>fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(rangeActionMode==='anchor'?{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar manual base anchor'}:{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar price override'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeActionMode==='anchor'?'Anchor':'Price'} saved for ${nDates} date${nDates===1?'':'s'}.`);clearRange();return loadCalendar();}).catch(e=>setToast(e.message));
+Promise.all(selectedListings.map(l=>fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(rangeActionMode==='anchor'?{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar manual base anchor'}:{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar price override'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeActionMode==='anchor'?'Anchor':'Price'} saved for ${nDates} date${nDates===1?'':'s'}.`);clearRange();return initialLoad();}).catch(e=>setToast(e.message));
 };
-const dateLabel=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+const dateLabel=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});
+const loadingDateSet=new Set(loadingDates);
 const cols=`${labelColWidth}px repeat(${days.length},${colWidth}px)`;
 return (
 <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0,background:'var(--color-white)',position:'relative',zIndex:1}}>
 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',rowGap:12,padding:'20px 24px',borderBottom:'1px solid var(--border-default)'}}>
 <div style={{display:'flex',alignItems:'center',gap:12}}>
-<Select value={String(currentMonth)} pill onChange={e=>scrollToCol(months[Number(e.target.value)].start)} options={months.map((m,idx)=>({label:m.label,value:String(idx)}))} />
-<div onClick={scrollToToday} style={{padding:'0 16px',height:38,boxSizing:'border-box',display:'flex',alignItems:'center',borderRadius:'var(--radius-full)',border:'1px solid var(--border-default)',fontSize:13,fontWeight:600,cursor:'pointer'}}>Today</div>
+<div style={{width:172,position:'relative',flexShrink:0}}>
+<Select value={months.length?String(currentMonth):'loading'} pill onChange={e=>{const month=months[Number(e.target.value)];if(month)scrollToCol(month.start);}} options={months.length?months.map((m,idx)=>({label:m.label,value:String(idx)})):[{label:' ',value:'loading'}]} />
+{!months.length&&<span className="calendar-skeleton calendar-skeleton-toolbar-month calendar-runtime-month-skeleton" aria-hidden="true" />}
+</div>
+<Button variant="secondary" size="sm" onClick={scrollToToday}>Today</Button>
 </div>
 <div style={{display:'flex',alignItems:'center',gap:8}}>
 <Button variant="secondary" size="sm" onClick={()=>setGlobalOpen(true)}>Global settings</Button>
@@ -246,22 +310,22 @@ return (
 </div>
 {toast&&<div style={{position:'absolute',top:20,right:24,zIndex:20}}><Toast tone="success" onClose={()=>setToast(null)}>{toast}</Toast></div>}
 <div style={{flex:1,position:'relative',minHeight:0,minWidth:0}}>
-{calendarLoading&&<div style={{position:'absolute',inset:0,zIndex:10,display:'grid',placeItems:'center',background:'var(--color-white)'}}><span style={{fontSize:13,color:'var(--text-muted)'}}>Loading calendar…</span></div>}
+{calendarLoading&&<CalendarLoadingSkeleton bodyOnly />}
 <div ref={scrollRef} onScroll={updateScrollState} onMouseMove={e=>{lastPointer.current={x:e.clientX,y:e.clientY};updateHoverFromPointer(e.clientX,e.clientY);}} onMouseLeave={()=>{setHoverCellKey(null);setTooltipData(null);}} style={{height:'100%',overflow:'auto'}}>
 <div style={{display:'grid',gridTemplateColumns:cols,minWidth:'fit-content'}}>
 <div style={{gridColumn:'1',gridRow:1,position:'sticky',left:0,top:0,zIndex:4,background:'var(--color-white)',padding:'20px 20px 12px',height:48,boxSizing:'border-box',display:'flex',alignItems:'center'}}>
 <h3 style={{fontFamily:'var(--font-display)',fontSize:'var(--text-lg)',fontWeight:600,margin:0}}>{listings.length} Properties</h3>
 </div>
 {months.map((m,idx)=>(
-<div key={m.label} style={{gridColumn:`${m.start+2} / ${idx+1<months.length?months[idx+1].start+2:days.length+2}`,gridRow:1,position:'sticky',top:0,left:labelColWidth,height:48,boxSizing:'border-box',zIndex:2,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,width:'fit-content',maxWidth:'100%',whiteSpace:'nowrap'}}>{m.label}</div>
+<div key={m.label} style={{gridColumn:`${m.start+2} / ${idx+1<months.length?months[idx+1].start+2:days.length+2}`,gridRow:1,position:'sticky',top:0,height:48,boxSizing:'border-box',zIndex:2,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,width:'fit-content',maxWidth:'100%',whiteSpace:'nowrap'}}>{m.label}</div>
 ))}
 <div style={{gridColumn:'1',gridRow:2,position:'sticky',left:0,top:48,zIndex:4,background:'var(--color-white)',borderBottom:'1px solid var(--border-default)',padding:'0 20px 12px'}}>
 <Input placeholder="Search listings..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} />
 </div>
 {days.map((d,i)=>(
-<div key={i} style={{gridColumn:i+2,gridRow:2,position:'sticky',top:48,zIndex:2,background:'var(--color-white)',textAlign:'center',padding:'10px 4px',fontSize:12,color:'var(--text-secondary)',borderTop:'1px solid var(--border-default)',borderBottom:'1px solid var(--border-default)'}}>
-<div>{d.toLocaleDateString('en-US',{weekday:'narrow'})}</div>
-<div style={{fontWeight:600,color:'var(--text-primary)',marginTop:2}}>{d.getDate()}</div>
+<div key={i} data-calendar-date={dateString(d)} aria-busy={loadingDateSet.has(dateString(d))} style={{gridColumn:i+2,gridRow:2,position:'sticky',top:48,zIndex:2,background:'var(--color-white)',textAlign:'center',padding:'10px 4px',fontSize:12,color:'var(--text-secondary)',borderTop:'1px solid var(--border-default)',borderBottom:'1px solid var(--border-default)'}}>
+{loadingDateSet.has(dateString(d))?<div className="calendar-skeleton-date" aria-label="Loading date"><span className="calendar-skeleton calendar-skeleton-weekday" /><span className="calendar-skeleton calendar-skeleton-day" /></div>:<><div>{d.toLocaleDateString('en-US',{weekday:'narrow',timeZone:'UTC'})}</div>
+<div style={{fontWeight:600,color:'var(--text-primary)',marginTop:2}}>{d.getUTCDate()}</div></>}
 </div>
 ))}
 {months.filter((m,idx)=>idx>0).map(m=>(
@@ -289,6 +353,7 @@ return (
 </div>
 </div>
 {days.map((d,i)=>{
+const isLoadingDate=loadingDateSet.has(dateString(d));
 const record=calendarRecords[`${l.id}:${days[i]?.toISOString().slice(0,10)}`];
 const cur=priceOverrides[l.name+'-'+i]??(record?.current_price??l.prices?.[days[i]?.toISOString().slice(0,10)]??price(l.base,i));
 const rec=record?.recommended_price??cur;
@@ -305,9 +370,9 @@ const edgeLeft=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.minDay:i)
 const edgeRight=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.maxDay:i);
 const cellBg=isAnchor?'var(--action-accent-soft)':inRange?'var(--action-accent-soft)':isHover?'rgba(11,12,14,0.04)':selected===l.name?'var(--surface-sunken)':'var(--color-white)';
 return (
-<div key={i} onClick={()=>handleCellClick(l.propIndex,i)} data-cell-key={cellKey} data-diff={diff} data-cur={cur} data-breakdown={breakdown?JSON.stringify(breakdown):''} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
-<div>{cur.toLocaleString('en-US')}</div>
-{diff!==0&&<div style={{marginTop:2,fontSize:11,fontWeight:600,color:diff>0?'var(--status-success)':'var(--status-danger)'}}>{rec.toLocaleString('en-US')}</div>}
+<div key={i} onClick={()=>!isLoadingDate&&handleCellClick(l.propIndex,i)} data-cell-key={cellKey} data-diff={isLoadingDate?0:diff} data-cur={cur} data-breakdown={isLoadingDate?'':breakdown?JSON.stringify(breakdown):''} aria-busy={isLoadingDate} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:isLoadingDate?'var(--surface-sunken)':cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getUTCDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:isLoadingDate?'default':'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
+{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:<><div>{cur.toLocaleString('en-US')}</div>
+{diff!==0&&<div style={{marginTop:2,fontSize:11,fontWeight:600,color:diff>0?'var(--status-success)':'var(--status-danger)'}}>{rec.toLocaleString('en-US')}</div>}</>}
 </div>);
 })}
 </React.Fragment>);
@@ -318,8 +383,8 @@ return (
 </div>
 <div style={{position:'absolute',left:labelColWidth,top:0,bottom:0,width:32,background:'linear-gradient(to right, rgba(11,12,14,0.10), rgba(11,12,14,0))',pointerEvents:'none',opacity:canLeft?1:0,transition:'opacity var(--duration-standard) var(--ease-standard)',zIndex:5}} />
 <div style={{position:'absolute',right:0,top:0,bottom:0,width:32,background:'linear-gradient(to left, rgba(11,12,14,0.10), rgba(11,12,14,0))',pointerEvents:'none',opacity:canRight?1:0,transition:'opacity var(--duration-standard) var(--ease-standard)',zIndex:5}} />
-{canLeft&&<div style={{position:'absolute',left:labelColWidth+8,top:76,transform:'translateY(-50%)',zIndex:6}}><IconButton label="Scroll earlier" onClick={()=>scrollBy(-1)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/chevron-left.svg" style={{width:16,height:16}} />} /></div>}
-{canRight&&<div style={{position:'absolute',right:8,top:76,transform:'translateY(-50%)',zIndex:6}}><IconButton label="Scroll later" onClick={()=>scrollBy(1)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/chevron-right.svg" style={{width:16,height:16}} />} /></div>}
+<div style={{position:'absolute',left:labelColWidth+8,top:76,transform:'translateY(-50%)',zIndex:6,opacity:canLeft?1:0,pointerEvents:canLeft?'auto':'none',transition:'opacity var(--duration-standard) var(--ease-standard)'}}><IconButton label="Scroll earlier" onClick={()=>scrollBy(-1)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/chevron-left.svg" style={{width:16,height:16}} />} /></div>
+<div style={{position:'absolute',right:8,top:76,transform:'translateY(-50%)',zIndex:6,opacity:canRight?1:0,pointerEvents:canRight?'auto':'none',transition:'opacity var(--duration-standard) var(--ease-standard)'}}><IconButton label="Scroll later" onClick={()=>scrollBy(1)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/chevron-right.svg" style={{width:16,height:16}} />} /></div>
 {tooltipData&&ReactDOM.createPortal(
 <div style={{position:'fixed',left:tooltipData.left,top:tooltipData.top,transform:`translate(-50%, ${tooltipData.placeBelow?'0':'-100%'})`,width:264,background:'var(--color-ink-600)',color:'#fff',fontSize:11.5,lineHeight:1.5,padding:'12px 14px',borderRadius:'var(--radius-sm)',fontFamily:'var(--font-sans)',zIndex:1000,boxShadow:'var(--shadow-md)',textAlign:'left',pointerEvents:'none'}}>
 <div style={{fontWeight:700,marginBottom:8,fontSize:13,color:tooltipData.diff>0?'#8fe8bd':'#ffb4b4'}}>{tooltipData.diff>0?'+':'-'}Rp{Math.abs(tooltipData.diff).toLocaleString('en-US')} ({tooltipData.diff>0?'+':'-'}{Math.abs(Math.round(tooltipData.diff/tooltipData.cur*100))}%)</div>
