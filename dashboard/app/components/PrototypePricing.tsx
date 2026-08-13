@@ -251,20 +251,18 @@ return (
 <div style={{gridColumn:1,gridRow:`1 / ${totalRows}`,position:'sticky',left:labelColWidth,width:0,zIndex:5,borderRight:'1px solid var(--border-default)',pointerEvents:'none'}} />
 {groups.map(g=>{
 const headerRow=g.row;
-const [groupHover,setGroupHover]=React.useState(false);
 return (
 <React.Fragment key={g.name}>
 <div style={{gridColumn:'1',gridRow:headerRow,position:'sticky',left:0,top:96,zIndex:5,boxSizing:'border-box'}}>
-<div onClick={()=>setSelected('group:'+g.name)} onMouseEnter={()=>setGroupHover(true)} onMouseLeave={()=>setGroupHover(false)} style={{width:labelColWidth,height:'100%',boxSizing:'border-box',display:'flex',alignItems:'center',padding:'10px 20px',cursor:'pointer',background:selected==='group:'+g.name?'var(--surface-sunken)':groupHover?'rgba(11,12,14,0.05)':'var(--color-mist)',borderBottom:'1px solid var(--border-default)',borderTop:'1px solid var(--border-default)'}}>
+<div onClick={()=>setSelected('group:'+g.name)} style={{width:labelColWidth,height:'100%',boxSizing:'border-box',display:'flex',alignItems:'center',padding:'10px 20px',cursor:'pointer',background:selected==='group:'+g.name?'var(--surface-sunken)':'var(--color-mist)',borderBottom:'1px solid var(--border-default)',borderTop:'1px solid var(--border-default)'}}>
 <span style={{fontWeight:700,fontSize:13,color:'var(--text-primary)'}}>{g.name}</span>
 </div>
 </div>
 <div style={{gridColumn:'2 / -1',gridRow:headerRow,position:'sticky',top:96,background:'var(--color-mist)',borderBottom:'1px solid var(--border-default)',borderTop:'1px solid var(--border-default)',boxSizing:'border-box',zIndex:4}} />
 {g.items.map((l,li)=>{
-const [hover,setHover]=React.useState(false);
 return (
 <React.Fragment key={l.name}>
-<div onClick={()=>setSelected(l.name)} onMouseEnter={()=>setHover(true)} onMouseLeave={()=>setHover(false)} style={{gridColumn:'1',gridRow:l.row,position:'sticky',left:0,zIndex:3,background:selected===l.name?'var(--surface-sunken)':hover?'var(--color-mist)':'var(--color-white)',display:'flex',alignItems:'center',gap:12,padding:'12px 20px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
+<div onClick={()=>setSelected(l.name)} style={{gridColumn:'1',gridRow:l.row,position:'sticky',left:0,zIndex:3,background:selected===l.name?'var(--surface-sunken)':'var(--color-white)',display:'flex',alignItems:'center',gap:12,padding:'12px 20px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
 <div style={{width:44,height:44,borderRadius:'var(--radius-md)',background:l.c,flexShrink:0}} />
 <div>
 <div style={{fontWeight:600,fontSize:14,color:'var(--text-primary)'}}>{l.name}</div>
