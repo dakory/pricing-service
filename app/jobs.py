@@ -180,9 +180,17 @@ def pricing_configuration(
     group_configuration = merge_pricing_configuration(
         global_configuration, group.pricing_settings if group else {}
     )
-    return merge_pricing_configuration(
-        group_configuration, prop.pricing_settings if prop else {}
-    )
+    property_overrides = dict(prop.pricing_settings or {}) if prop else {}
+    if prop:
+        global_values = (setting.value if setting else {})
+        group_values = group.pricing_settings if group else {}
+        if "minimum_price" not in property_overrides and "minimum_price" not in global_values and "minimum_price" not in group_values:
+            property_overrides["minimum_price"] = float(prop.min_price)
+        if "maximum_price" not in property_overrides and "maximum_price" not in global_values and "maximum_price" not in group_values:
+            property_overrides["maximum_price"] = float(prop.max_price)
+        if "rounding_increment" not in property_overrides and "rounding_increment" not in global_values and "rounding_increment" not in group_values:
+            property_overrides["rounding_increment"] = prop.rounding_increment
+    return merge_pricing_configuration(group_configuration, property_overrides)
 
 
 def pricing_configuration_with_sources(
@@ -193,10 +201,18 @@ def pricing_configuration_with_sources(
     setting = db.get(Setting, "pricing_engine_v2")
     global_overrides = setting.value if setting else {}
     group = prop.pricing_group
+    property_overrides = dict(prop.pricing_settings or {})
+    group_values = group.pricing_settings if group else {}
+    if "minimum_price" not in property_overrides and "minimum_price" not in global_overrides and "minimum_price" not in group_values:
+        property_overrides["minimum_price"] = float(prop.min_price)
+    if "maximum_price" not in property_overrides and "maximum_price" not in global_overrides and "maximum_price" not in group_values:
+        property_overrides["maximum_price"] = float(prop.max_price)
+    if "rounding_increment" not in property_overrides and "rounding_increment" not in global_overrides and "rounding_increment" not in group_values:
+        property_overrides["rounding_increment"] = prop.rounding_increment
     layers = [
         ("global", global_overrides),
         ("pricing_group", group.pricing_settings if group else {}),
-        ("property", prop.pricing_settings or {}),
+        ("property", property_overrides),
     ]
     effective = DEFAULT_PRICING_CONFIGURATION.copy()
     sources = {key: "default" for key in effective}
@@ -332,6 +348,8 @@ def generate_price_recommendations(
         minimum_competitor_count = int(
             configuration["minimum_competitor_count"]
         )
+        if configuration.get("suggest_prices") is False:
+            continue
         stale = imported_at is None or imported_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc) - timedelta(hours=36)
         for offset in range(horizon_days):
             stay_date = today + timedelta(days=offset)
@@ -414,9 +432,9 @@ def generate_price_recommendations(
                 price_anchor=anchor_payload,
                 available_competitor_count=len(available_prices),
                 minimum_competitor_count=minimum_competitor_count,
-                minimum_price=float(prop.min_price),
-                maximum_price=float(prop.max_price),
-                pricing_step=prop.rounding_increment,
+                minimum_price=float(configuration["minimum_price"]),
+                maximum_price=float(configuration["maximum_price"]),
+                pricing_step=int(configuration["rounding_increment"]),
                 configuration=configuration,
                 manual_override=float(override.price) if override else None,
             )
@@ -439,8 +457,8 @@ def generate_price_recommendations(
                 warnings.append("price_at_bound")
             result["explanation"].update(
                 {
-                    "minimum_price": float(prop.min_price),
-                    "maximum_price": float(prop.max_price),
+                    "minimum_price": float(configuration["minimum_price"]),
+                    "maximum_price": float(configuration["maximum_price"]),
                     "current_inventory": current.inventory if current else None,
                     "hostex_imported_at": imported_at.isoformat() if imported_at else None,
                     "change_percentage": change_pct,

@@ -384,11 +384,13 @@ def pricing_calendar(
                     "start_date": override.start_date,
                     "end_date": override.end_date,
                     "reason": override.reason,
+                    "suggest_prices": override.suggest_prices,
                 },
                 "anchor": None if anchor is None else {
                     "id": anchor.id,
                     "source_type": anchor.source_type,
                     "source_price": anchor.source_price,
+                    "suggest_prices": anchor.suggest_prices,
                 },
                 "warnings": recommendation.explanation.get("warnings", []) if recommendation else [],
                 "explanation": recommendation.explanation if recommendation else {},
@@ -448,11 +450,22 @@ def create_override(payload: OverrideCreate, db: Session = Depends(get_database_
 
     if not db.get(Property, payload.property_id):
         raise HTTPException(404, "Property not found")
-    item = Override(**payload.model_dump())
-    db.add(item)
+    values = payload.model_dump()
+    values.pop("suggest_prices", None)
+    values.pop("start_date", None)
+    values.pop("end_date", None)
+    available_days = db.scalars(
+        select(HostexCalendarDay).where(
+            HostexCalendarDay.property_id == payload.property_id,
+            HostexCalendarDay.channel_type == "booking_site",
+            HostexCalendarDay.stay_date.between(payload.start_date, payload.end_date),
+        )
+    ).all()
+    available = [row.stay_date for row in available_days if row.inventory is None or row.inventory > 0]
+    for stay_date in available:
+        db.add(Override(**values, start_date=stay_date, end_date=stay_date, suggest_prices=False))
     db.commit()
-    db.refresh(item)
-    return {"id": item.id}
+    return {"count": len(available), "skipped_unavailable": (payload.end_date - payload.start_date).days + 1 - len(available)}
 
 
 @router.get("/overrides", dependencies=[Depends(require_session)])
@@ -471,6 +484,7 @@ def list_overrides(property_id: int | None = None, db: Session = Depends(get_dat
             "price": item.price,
             "reason": item.reason,
             "created_at": item.created_at,
+            "suggest_prices": item.suggest_prices,
         }
         for item in db.scalars(query)
     ]
@@ -507,11 +521,22 @@ def create_manual_price_anchor(
             )
         )
         metadata = {"reason": payload.reason}
+        calendar = db.scalar(
+            select(HostexCalendarDay).where(
+                HostexCalendarDay.property_id == payload.property_id,
+                HostexCalendarDay.channel_type == "booking_site",
+                HostexCalendarDay.stay_date == cursor,
+            )
+        )
+        if calendar is None or (calendar.inventory is not None and calendar.inventory <= 0):
+            cursor += timedelta(days=1)
+            continue
         if item:
             item.source_type = "manual_base"
             item.source_price = payload.price
             item.currency = "IDR"
             item.source_metadata = metadata
+            item.suggest_prices = payload.suggest_prices
             item.updated_at = now
         else:
             db.add(
@@ -522,6 +547,7 @@ def create_manual_price_anchor(
                     source_price=payload.price,
                     currency="IDR",
                     source_metadata=metadata,
+                    suggest_prices=payload.suggest_prices,
                     created_at=now,
                     updated_at=now,
                 )
@@ -552,6 +578,7 @@ def list_price_anchors(
             "source_metadata": item.source_metadata,
             "created_at": item.created_at,
             "updated_at": item.updated_at,
+            "suggest_prices": item.suggest_prices,
         }
         for item in db.scalars(query)
     ]

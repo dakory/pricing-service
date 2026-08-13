@@ -18,6 +18,12 @@ DEFAULT_PRICING_CONFIGURATION = {
         {"minimum_days": 8, "maximum_days": 14, "adjustment": -0.05},
         {"minimum_days": 15, "maximum_days": 30, "adjustment": -0.02},
     ],
+    # Global bounds are inherited by groups and properties unless overridden.
+    "minimum_price": 1,
+    "maximum_price": 999_999_999,
+    "rounding_increment": 50_000,
+    # Property-level default for whether recommendations remain active.
+    "suggest_prices": True,
 }
 
 

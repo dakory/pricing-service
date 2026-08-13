@@ -83,6 +83,7 @@ class OverrideCreate(BaseModel):
     end_date: date
     price: Decimal | None = Field(default=None, gt=0)
     reason: str = Field(min_length=1, max_length=300)
+    suggest_prices: bool | None = None
 
     @model_validator(mode="after")
     def valid_override(self):
@@ -103,6 +104,7 @@ class PriceAnchorCreate(BaseModel):
     end_date: date
     price: Decimal = Field(gt=0)
     reason: str = Field(min_length=1, max_length=300)
+    suggest_prices: bool | None = None
 
     @model_validator(mode="after")
     def valid_range(self):
@@ -153,6 +155,10 @@ class PricingConfiguration(BaseModel):
     minimum_competitor_count: int = Field(ge=1, le=30)
     urgency_adjustment_enabled: bool
     urgency_adjustments: list[UrgencyRule]
+    minimum_price: Decimal = Field(default=1, gt=0)
+    maximum_price: Decimal = Field(default=999_999_999, gt=0)
+    rounding_increment: int = Field(default=50_000, gt=0)
+    suggest_prices: bool = True
 
     @model_validator(mode="after")
     def valid_configuration(self):
@@ -163,6 +169,8 @@ class PricingConfiguration(BaseModel):
         self.urgency_adjustments = validate_urgency_rules(
             self.urgency_adjustments
         )
+        if self.minimum_price > self.maximum_price:
+            raise ValueError("minimum_price must not exceed maximum_price")
         return self
 
 
@@ -177,6 +185,10 @@ class PricingConfigurationOverride(BaseModel):
     minimum_competitor_count: int | None = Field(default=None, ge=1, le=30)
     urgency_adjustment_enabled: bool | None = None
     urgency_adjustments: list[UrgencyRule] | None = None
+    minimum_price: Decimal | None = Field(default=None, gt=0)
+    maximum_price: Decimal | None = Field(default=None, gt=0)
+    rounding_increment: int | None = Field(default=None, gt=0)
+    suggest_prices: bool | None = None
 
     @model_validator(mode="after")
     def valid_rules(self):

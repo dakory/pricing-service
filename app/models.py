@@ -339,6 +339,7 @@ class Override(Base):
     end_date: Mapped[date] = mapped_column(Date)
     price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2))
     reason: Mapped[str] = mapped_column(String(300))
+    suggest_prices: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -384,6 +385,7 @@ class PriceAnchor(Base):
     source_price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
     currency: Mapped[str] = mapped_column(String(3), default="IDR")
     source_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    suggest_prices: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
