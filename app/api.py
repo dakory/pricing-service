@@ -29,7 +29,12 @@ from app.competitors import sync_group_competitor_listings
 from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
 from app.hostex_import import import_booking_site_calendars, import_hostex
-from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
+from app.jobs import (
+    generate_price_recommendations,
+    pricing_configuration,
+    publish_recommendations,
+    serialized_run,
+)
 from app.models import (
     AdminSession,
     CompetitorDateError,
@@ -413,6 +418,24 @@ def run_pricing(db: Session = Depends(get_database_session)):
         count = generate_price_recommendations(db)
         run.summary = {"optimized": count, "published": 0}
         return {"run_id": run.id, "optimized": count, "published": 0}
+
+
+@router.post("/pricing/publish", dependencies=[Depends(require_csrf)])
+async def publish_pricing(db: Session = Depends(get_database_session)):
+    """Publish current recommendations after the dashboard confirmation step."""
+
+    settings = get_settings()
+    if not settings.hostex_access_token:
+        raise HTTPException(409, "HOSTEX_ACCESS_TOKEN is not configured")
+    with serialized_run(db, RunKind.publish) as run:
+        if run is None:
+            raise HTTPException(409, "Another serialized job is running")
+        try:
+            published = await publish_recommendations(db)
+            run.summary = {"published": published}
+            return {"run_id": run.id, "published": published}
+        except HostexError as exc:
+            raise HTTPException(502, "Hostex publishing failed; see Activity") from exc
 
 
 @router.post("/overrides", dependencies=[Depends(require_csrf)])
