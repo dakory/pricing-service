@@ -62,10 +62,11 @@ function Pricing(){
 const [days,setDays]=React.useState([]);
 const [listings,setListings]=React.useState([]);
 const [calendarLoading,setCalendarLoading]=React.useState(true);
+const [calendarRecords,setCalendarRecords]=React.useState({});
 const [globalSettings,setGlobalSettings]=React.useState({minComp:'10',positioning:'1',guestToHost:'0.839',minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:'on',method:'median',manualBase:'',rules:[{f:0,t:3,d:-0.15},{f:4,t:7,d:-0.10},{f:8,t:14,d:-0.05},{f:15,t:30,d:-0.02}]});
 const [pricingGroups,setPricingGroups]=React.useState([]);
 const [searchQuery,setSearchQuery]=React.useState('');
-const loadCalendar=React.useCallback(()=>{const start=new Date(Date.now()-7*86400000).toISOString().slice(0,10);const end=new Date(Date.now()+43*86400000).toISOString().slice(0,10);return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties){setDays([]);setListings([]);return;}const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({id:p.id,name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),groupId:p.pricing_group_id,group:p.pricing_group_name||('Pricing group '+p.pricing_group_id),prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));});},[]);
+const loadCalendar=React.useCallback(()=>{const start=new Date(Date.now()-7*86400000).toISOString().slice(0,10);const end=new Date(Date.now()+43*86400000).toISOString().slice(0,10);return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties){setDays([]);setListings([]);return;}const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setCalendarRecords(Object.fromEntries((payload.days||[]).map(d=>[`${d.property_id}:${d.stay_date}`,d])));setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({id:p.id,name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),groupId:p.pricing_group_id,group:p.pricing_group_name||('Pricing group '+p.pricing_group_id),prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));});},[]);
 React.useEffect(()=>{let active=true;Promise.all([loadCalendar(),fetch('/api/settings/pricing').then(r=>r.ok?r.json():null),fetch('/api/pricing-groups').then(r=>r.ok?r.json():[])]).then(([,settings,groups])=>{if(active&&settings){setGlobalSettings({minComp:String(settings.minimum_competitor_count),positioning:String(settings.market_positioning_factor),guestToHost:String(settings.guest_to_host_price_factor),minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:settings.urgency_adjustment_enabled?'on':'off',method:settings.base_price_mode==='manual'?'manual':'median',manualBase:settings.manual_base_price?String(settings.manual_base_price):'',rules:(settings.urgency_adjustments||[]).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment}))});}if(active){setPricingGroups(groups||[]);setGroupData(Object.fromEntries((groups||[]).map(g=>[g.name,{name:g.name,minComp:g.pricing_settings?.minimum_competitor_count?String(g.pricing_settings.minimum_competitor_count):'',urls:(g.competitor_urls||[]).join('\n')}])));}}).catch(()=>{}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[loadCalendar]);
 const visibleListings=listings.filter(l=>l.name.toLowerCase().includes(searchQuery.trim().toLowerCase()));
 const groupOrder=[];visibleListings.forEach(l=>{if(!groupOrder.includes(l.group))groupOrder.push(l.group);});
@@ -193,7 +194,7 @@ setBusy(key);
 const paths={fetch:'/api/imports/hostex/booking-site',generate:'/api/pricing/run',apply:'/api/pricing/publish'};
 const path=paths[key];
 if(!path){setTimeout(()=>{setBusy(null);setToast(label);},500);return;}
-fetch(path,{method:'POST',headers:{'X-CSRF-Token':decodeURIComponent(document.cookie.split('; ').find(row=>row.startsWith('pricing_csrf='))?.split('=')[1]||'')}}).then(async response=>{const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.detail||label+' failed');setBusy(null);setToast(label);if(key==='fetch')setLastSync(s=>({...s,fetch:'Just now'}));if(key==='generate')setLastSync(s=>({...s,generate:'Just now'}));if(key==='apply')setLastSync(s=>({...s,apply:'Just now'}));setTimeout(()=>setToast(null),2600);}).catch(error=>{setBusy(null);setToast(error.message);});
+fetch(path,{method:'POST',headers:{'X-CSRF-Token':csrfToken()}}).then(async response=>{const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.detail||label+' failed');setBusy(null);setToast(label);if(key==='fetch')setLastSync(s=>({...s,fetch:'Just now'}));if(key==='generate')setLastSync(s=>({...s,generate:'Just now'}));if(key==='apply')setLastSync(s=>({...s,apply:'Just now'}));return loadCalendar();}).then(()=>setTimeout(()=>setToast(null),2600)).catch(error=>{setBusy(null);setToast(error.message);});
 };
 const handleCellClick=(propIndex,dayIndex)=>{
 if(!rangeAnchor){
@@ -277,8 +278,11 @@ return (
 </div>
 </div>
 {days.map((d,i)=>{
-const cur=priceOverrides[l.name+'-'+i]??(l.prices?.[days[i]?.toISOString().slice(0,10)]||price(l.base,i));
-const {rec,breakdown}=recommendation(l.base,i,li);
+const record=calendarRecords[`${l.id}:${days[i]?.toISOString().slice(0,10)}`];
+const cur=priceOverrides[l.name+'-'+i]??(record?.current_price??l.prices?.[days[i]?.toISOString().slice(0,10)]??price(l.base,i));
+const rec=record?.recommended_price??cur;
+const explanation=record?.explanation;
+const breakdown=explanation&&Object.keys(explanation).length?{source:explanation.price_source||explanation.anchor_source,guestMedian:explanation.airbnb_guest_market_median,availableComp:explanation.available_competitor_count,requiredComp:explanation.minimum_competitor_count,guestToHostFactor:explanation.guest_to_host_price_factor,hostMedian:explanation.estimated_host_price_median,positioningFactor:explanation.market_positioning_factor,basePrice:explanation.base_price,daysUntilStay:explanation.days_until_stay,urgencyPct:explanation.urgency_adjustment!=null?explanation.urgency_adjustment*100:null,raw:explanation.raw_price,rounded:explanation.rounded_price,final:explanation.final_price||record.recommended_price,dateOverride:explanation.price_source==='manual_override'}:null;
 const diff=rec-cur;
 const cellKey=l.name+'-'+i;
 const isHover=hoverCellKey===cellKey;
