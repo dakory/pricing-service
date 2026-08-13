@@ -4,6 +4,7 @@
 import React from "react";
 import ReactDOM from "react-dom";
 import { Input, IconButton, Select, Button, Toast, Switch, InputWithSelectField } from "./design-system";
+const csrfToken=()=>decodeURIComponent(document.cookie.split('; ').find(row=>row.startsWith('pricing_csrf='))?.split('=')[1]||'');
 // These implementations mirror the corresponding design-system sources in
 // nicer.homes_design_system/components. They are kept local because the
 // design-system bundle is browser-global in the original prototype.
@@ -61,11 +62,16 @@ function Pricing(){
 const [days,setDays]=React.useState([]);
 const [listings,setListings]=React.useState([]);
 const [calendarLoading,setCalendarLoading]=React.useState(true);
-React.useEffect(()=>{let active=true;fetch('/api/pricing-calendar?start='+new Date().toISOString().slice(0,10)+'&end='+new Date(Date.now()+27*86400000).toISOString().slice(0,10)).then(r=>r.ok?r.json():null).then(payload=>{if(!active)return;if(!payload?.properties){setDays([]);setListings([]);return;}const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),group:'Pricing group '+p.pricing_group_id,prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));}).catch(()=>{if(active){setDays([]);setListings([]);}}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[]);
-const groupOrder=[];listings.forEach(l=>{if(!groupOrder.includes(l.group))groupOrder.push(l.group);});
+const [globalSettings,setGlobalSettings]=React.useState({minComp:'10',positioning:'1',guestToHost:'0.839',minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:'on',method:'median',manualBase:'',rules:[{f:0,t:3,d:-0.15},{f:4,t:7,d:-0.10},{f:8,t:14,d:-0.05},{f:15,t:30,d:-0.02}]});
+const [pricingGroups,setPricingGroups]=React.useState([]);
+const [searchQuery,setSearchQuery]=React.useState('');
+const loadCalendar=React.useCallback(()=>{const start=new Date(Date.now()-7*86400000).toISOString().slice(0,10);const end=new Date(Date.now()+43*86400000).toISOString().slice(0,10);return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties){setDays([]);setListings([]);return;}const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({id:p.id,name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),groupId:p.pricing_group_id,group:p.pricing_group_name||('Pricing group '+p.pricing_group_id),prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));});},[]);
+React.useEffect(()=>{let active=true;Promise.all([loadCalendar(),fetch('/api/settings/pricing').then(r=>r.ok?r.json():null),fetch('/api/pricing-groups').then(r=>r.ok?r.json():[])]).then(([,settings,groups])=>{if(active&&settings){setGlobalSettings({minComp:String(settings.minimum_competitor_count),positioning:String(settings.market_positioning_factor),guestToHost:String(settings.guest_to_host_price_factor),minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:settings.urgency_adjustment_enabled?'on':'off',method:settings.base_price_mode==='manual'?'manual':'median',manualBase:settings.manual_base_price?String(settings.manual_base_price):'',rules:(settings.urgency_adjustments||[]).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment}))});}if(active){setPricingGroups(groups||[]);setGroupData(Object.fromEntries((groups||[]).map(g=>[g.name,{name:g.name,minComp:g.pricing_settings?.minimum_competitor_count?String(g.pricing_settings.minimum_competitor_count):'',urls:(g.competitor_urls||[]).join('\n')}])));}}).catch(()=>{}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[loadCalendar]);
+const visibleListings=listings.filter(l=>l.name.toLowerCase().includes(searchQuery.trim().toLowerCase()));
+const groupOrder=[];visibleListings.forEach(l=>{if(!groupOrder.includes(l.group))groupOrder.push(l.group);});
 let rowCursor=3;let propCursor=0;
 const groups=groupOrder.map(gname=>{
-const items=listings.filter(l=>l.group===gname);
+const items=visibleListings.filter(l=>l.group===gname);
 const row=rowCursor;rowCursor+=1;
 items.forEach(it=>{it.row=rowCursor;rowCursor+=1;it.propIndex=propCursor;propCursor+=1;});
 return {name:gname,items,row};
@@ -81,12 +87,12 @@ const [busy,setBusy]=React.useState(null);
 const [lastSync,setLastSync]=React.useState({fetch:'2 hours ago',comp:'Yesterday at 6:40 PM',generate:'5 hours ago',apply:'3 days ago'});
 const [actionsOpen,setActionsOpen]=React.useState(false);
 const [globalOpen,setGlobalOpen]=React.useState(false);
-const [globalSettings,setGlobalSettings]=React.useState({minComp:'3',positioning:'1',guestToHost:'0.839',minIDR:'900,000',maxIDR:'1,800,000',step:'1,000',useUrgency:'on',method:'median',manualBase:'',rules:[{f:0,t:3,d:-0.3},{f:4,t:7,d:-0.2},{f:8,t:14,d:-0.1},{f:15,t:30,d:-0.05}]});
 const setGlobalField=(field,val)=>setGlobalSettings(s=>({...s,[field]:val}));
-const saveGlobal=()=>{const min=Number(String(globalSettings.minIDR).replace(/,/g,''));const max=Number(String(globalSettings.maxIDR).replace(/,/g,''));const step=Number(String(globalSettings.step).replace(/,/g,''));if(!min||!max||min>max||!step){setToast('Check minimum, maximum, and rounding values.');setTimeout(()=>setToast(null),2600);return;}setToast('Global settings saved.');setTimeout(()=>setToast(null),2600);setGlobalOpen(false);};
+const saveGlobal=()=>{if(!globalSettings)return;const min=Number(String(globalSettings.minIDR||'').replace(/,/g,''));const max=Number(String(globalSettings.maxIDR||'').replace(/,/g,''));const step=Number(String(globalSettings.step||'').replace(/,/g,''));if(!min||!max||min>max||!step){setToast('Check minimum, maximum, and rounding values.');setTimeout(()=>setToast(null),2600);return;}fetch('/api/settings/pricing',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({base_price_mode:globalSettings.method==='median'?'market_median':'manual',manual_base_price:globalSettings.manualBase?Number(String(globalSettings.manualBase).replace(/,/g,'')):null,guest_to_host_price_factor:Number(globalSettings.guestToHost),market_positioning_factor:Number(globalSettings.positioning),minimum_competitor_count:Number(globalSettings.minComp),urgency_adjustment_enabled:globalSettings.useUrgency!=='off',urgency_adjustments:globalSettings.rules.map(r=>({minimum_days:r.f,maximum_days:r.t,adjustment:Number(r.d)}))})}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save global settings');setToast('Global settings saved.');setGlobalOpen(false);}).catch(e=>setToast(e.message));};
 const [tooltipData,setTooltipData]=React.useState(null);
 const [priceOverrides,setPriceOverrides]=React.useState({});
 const [rangePriceInput,setRangePriceInput]=React.useState('');
+const [rangeActionMode,setRangeActionMode]=React.useState('override');
 const [propertyData,setPropertyData]=React.useState({});
 const [groupPickerOpen,setGroupPickerOpen]=React.useState(false);
 const [groupOverrides,setGroupOverrides]=React.useState({});
@@ -101,15 +107,22 @@ return ()=>document.removeEventListener('mousedown',onDoc);
 const [posInfoOpen,setPosInfoOpen]=React.useState(false);
 const activeProperty=selected&&!selected.startsWith('group:')?listings.find(l=>l.name===selected):null;
 const propFor=(name)=>propertyData[name]||{enabled:true,method:'median',manualBase:'',positioning:'1',minComp:'',useUrgency:'global',urgencyOpen:false,rules:[{f:0,t:3,d:-0.3},{f:4,t:7,d:-0.2},{f:8,t:14,d:-0.1},{f:15,t:30,d:-0.05}],minIDR:'',maxIDR:'',step:''};
+React.useEffect(()=>{if(!activeProperty?.id)return;fetch('/api/settings/pricing/effective/'+activeProperty.id).then(r=>r.ok?r.json():null).then(data=>{if(!data)return;const v=data.values||data;setPropertyData(d=>({...d,[activeProperty.name]:{...propFor(activeProperty.name),method:v.base_price_mode==='manual'?'manual':'median',manualBase:v.manual_base_price?String(v.manual_base_price):'',positioning:String(v.market_positioning_factor),minComp:String(v.minimum_competitor_count),useUrgency:v.urgency_adjustment_enabled?'on':'off',rules:(v.urgency_adjustments||[]).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment})),minIDR:String(activeProperty.min_price||''),maxIDR:String(activeProperty.max_price||''),step:String(activeProperty.rounding_increment||'')}}));}).catch(()=>{});},[activeProperty?.id]);
 const setPropField=(name,field,val)=>setPropertyData(d=>({...d,[name]:{...propFor(name),[field]:val}}));
 const setPropRules=(name,updater)=>setPropertyData(d=>{const cur=propFor(name);const rules=typeof updater==='function'?updater(cur.rules):updater;return {...d,[name]:{...cur,rules}};});
-const saveProperty=(name)=>{const pd=propFor(name);const min=Number(String(pd.minIDR).replace(/,/g,''));const max=Number(String(pd.maxIDR).replace(/,/g,''));if(pd.minIDR&&pd.maxIDR&&min>max){setToast('Minimum price cannot exceed maximum price.');setTimeout(()=>setToast(null),2600);return;}setToast('Property settings saved.');setTimeout(()=>setToast(null),2600);setSelected(null);};
+const saveProperty=(name)=>{
+ const pd=propFor(name); const item=listings.find(l=>l.name===name); const min=Number(String(pd.minIDR).replace(/,/g,'')); const max=Number(String(pd.maxIDR).replace(/,/g,''));
+ if(pd.minIDR&&pd.maxIDR&&min>max){setToast('Minimum price cannot exceed maximum price.');return;}
+ const selectedGroup=pricingGroups.find(g=>g.name===(groupOverrides[name]||item.group));
+ const payload={pricing_group_id:selectedGroup?.id||item.groupId,min_price:min,max_price:max,rounding_increment:Number(String(pd.step||'').replace(/,/g,'')),pricing_settings:{base_price_mode:pd.method==='median'?'market_median':'manual',manual_base_price:pd.manualBase?Number(String(pd.manualBase).replace(/,/g,'')):null,market_positioning_factor:Number(pd.positioning),minimum_competitor_count:Number(pd.minComp),urgency_adjustment_enabled:pd.useUrgency==='on',urgency_adjustments:pd.rules.map(r=>({minimum_days:r.f,maximum_days:r.t,adjustment:Number(r.d)}))}};
+ fetch('/api/properties/'+item.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(payload)}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save property');setToast('Property settings saved.');setSelected(null);return loadCalendar();}).catch(e=>setToast(e.message));
+};
 const [groupData,setGroupData]=React.useState({});
 const defaultGroupUrls=(gname)=>Array.from({length:9},(_,i)=>`https://www.airbnb.com/rooms/${1500000000000+Math.abs(Math.round(Math.sin(gname.length+i*3.1)*99999999999))}`).join('\n');
 const activeGroupName=selected&&selected.startsWith('group:')?selected.slice(6):null;
 const groupFor=(gname)=>groupData[gname]||{name:gname,minComp:'',urls:defaultGroupUrls(gname)};
 const setGroupField=(gname,field,val)=>setGroupData(d=>({...d,[gname]:{...groupFor(gname),[field]:val}}));
-const saveGroup=(gname)=>{setToast('Pricing group saved.');setTimeout(()=>setToast(null),2600);setSelected(null);};
+const saveGroup=(gname)=>{const gd=groupFor(gname);const group=pricingGroups.find(g=>g.name===gname);fetch('/api/pricing-groups/'+group.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({name:gd.name,competitor_urls:gd.urls.split('\n').map(u=>u.trim()).filter(Boolean),pricing_settings:gd.minComp?{minimum_competitor_count:Number(gd.minComp)}:{}})}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save pricing group');setToast('Pricing group saved.');setSelected(null);const groups=await fetch('/api/pricing-groups').then(x=>x.json());setPricingGroups(groups);return loadCalendar();}).catch(e=>setToast(e.message));};
 const scrollRef=React.useRef(null);
 const [canLeft,setCanLeft]=React.useState(false);
 const [canRight,setCanRight]=React.useState(true);
@@ -195,16 +208,15 @@ const clearRange=()=>{setRangeAnchor(null);setRangeSelection(null);setRangePrice
 const saveRangePrice=()=>{
 const val=Number(String(rangePriceInput).replace(/[^0-9]/g,''));
 if(!val||!rangeSelection)return;
-const updates={};
+const selectedListings=[];
 listings.forEach(l=>{
 if(l.propIndex<rangeSelection.minProp||l.propIndex>rangeSelection.maxProp)return;
-for(let i=rangeSelection.minDay;i<=rangeSelection.maxDay;i++){updates[l.name+'-'+i]=val;}
+selectedListings.push(l);
 });
-setPriceOverrides(o=>({...o,...updates}));
 const nDates=(rangeSelection.maxDay-rangeSelection.minDay+1)*(rangeSelection.maxProp-rangeSelection.minProp+1);
-setToast(`Price updated for ${nDates} date${nDates===1?'':'s'}.`);
-setTimeout(()=>setToast(null),2600);
-clearRange();
+const start=days[rangeSelection.minDay].toISOString().slice(0,10); const end=days[rangeSelection.maxDay].toISOString().slice(0,10);
+const path=rangeActionMode==='anchor'?'/api/price-anchors':'/api/overrides';
+Promise.all(selectedListings.map(l=>fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(rangeActionMode==='anchor'?{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar manual base anchor'}:{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar price override'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeActionMode==='anchor'?'Anchor':'Price'} saved for ${nDates} date${nDates===1?'':'s'}.`);clearRange();return loadCalendar();}).catch(e=>setToast(e.message));
 };
 const dateLabel=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
 const cols=`${labelColWidth}px repeat(${days.length},${colWidth}px)`;
@@ -232,7 +244,7 @@ return (
 <div key={m.label} style={{gridColumn:`${m.start+2} / ${idx+1<months.length?months[idx+1].start+2:days.length+2}`,gridRow:1,position:'sticky',top:0,left:labelColWidth,height:48,boxSizing:'border-box',zIndex:2,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,width:'fit-content',maxWidth:'100%',whiteSpace:'nowrap'}}>{m.label}</div>
 ))}
 <div style={{gridColumn:'1',gridRow:2,position:'sticky',left:0,top:48,zIndex:4,background:'var(--color-white)',borderBottom:'1px solid var(--border-default)',padding:'0 20px 12px'}}>
-<Input placeholder="Search listings..." />
+<Input placeholder="Search listings..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} />
 </div>
 {days.map((d,i)=>(
 <div key={i} style={{gridColumn:i+2,gridRow:2,position:'sticky',top:48,zIndex:2,background:'var(--color-white)',textAlign:'center',padding:'10px 4px',fontSize:12,color:'var(--text-secondary)',borderTop:'1px solid var(--border-default)',borderBottom:'1px solid var(--border-default)'}}>
@@ -352,6 +364,7 @@ return (
 <IconButton label="Close" onClick={clearRange} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} />
 </div>
 <Input label="Nightly price" prefix="Rp" numeric min={1} placeholder="e.g. 4,500,000" value={rangePriceInput} onChange={e=>setRangePriceInput(e.target.value)} />
+<Select value={rangeActionMode} onChange={e=>setRangeActionMode(e.target.value)} options={[{label:'Price override',value:'override'},{label:'Manual base anchor',value:'anchor'}]} />
 <Button variant="accent" size="sm" style={{width:'100%',marginTop:16}} onClick={saveRangePrice}>Save</Button>
 </div>, document.body)}
 {ReactDOM.createPortal(

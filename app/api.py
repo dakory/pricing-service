@@ -364,6 +364,7 @@ def pricing_calendar(
                 "property_id": property_item.id,
                 "property_name": property_item.name,
                 "pricing_group_id": property_item.pricing_group_id,
+                "pricing_group_name": property_item.pricing_group.name if property_item.pricing_group else f"Pricing group {property_item.pricing_group_id}",
                 "stay_date": cursor,
                 "available": available,
                 "inventory": calendar.inventory if calendar else None,
@@ -402,6 +403,7 @@ def pricing_calendar(
                 "id": item.id,
                 "name": item.name,
                 "pricing_group_id": item.pricing_group_id,
+                "pricing_group_name": item.pricing_group.name if item.pricing_group else f"Pricing group {item.pricing_group_id}",
                 "booking_site_listing_id": item.booking_site_listing_id,
             }
             for item in properties
