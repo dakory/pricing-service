@@ -4,3 +4,6 @@ __pycache__
 .venv
 .env
 terraform
+._*
+**/._*
+.DS_Store
