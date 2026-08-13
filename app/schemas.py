@@ -14,6 +14,7 @@ class PropertyBase(BaseModel):
     pricing_group_id: int
     hostex_listing_id: str
     booking_site_listing_id: str | None = None
+    thumbnail_url: str | None = None
     active: bool = True
     min_price: Decimal = Field(gt=0)
     max_price: Decimal = Field(gt=0)

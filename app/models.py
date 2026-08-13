@@ -59,6 +59,7 @@ class Property(Base):
     pricing_group_id: Mapped[int] = mapped_column(ForeignKey("pricing_groups.id"))
     name: Mapped[str] = mapped_column(String(200))
     hostex_property_id: Mapped[Optional[int]] = mapped_column(Integer, unique=True)
+    thumbnail_url: Mapped[Optional[str]] = mapped_column(String(1000))
     hostex_listing_id: Mapped[str] = mapped_column(String(100), unique=True)
     booking_site_listing_id: Mapped[Optional[str]] = mapped_column(String(100))
     active: Mapped[bool] = mapped_column(Boolean, default=True)

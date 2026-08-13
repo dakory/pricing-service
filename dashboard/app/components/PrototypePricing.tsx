@@ -9,7 +9,7 @@ const csrfToken=()=>decodeURIComponent(document.cookie.split('; ').find(row=>row
 // These implementations mirror the corresponding design-system sources in
 // nicer.homes_design_system/components. They are kept local because the
 // design-system bundle is browser-global in the original prototype.
-function UrgencyRulesEditor({rules,setRules}){
+function UrgencyRulesEditor({rules,setRules,loading=false}){
 const [hover,setHover]=React.useState(null);
 const sorted=[...rules].sort((a,b)=>a.f-b.f);
 const display=[];
@@ -26,7 +26,7 @@ const addGap=g=>setRules(rs=>[...rs,{f:g.f,t:g.t,d:0}]);
 return (
 <div>
 <div style={{position:'relative',height:72,marginBottom:8,display:'flex',alignItems:'flex-end',gap:0}}>
-{display.map((r,i)=>(
+{loading?[0,1,2,3].map(i=><div key={`chart-loading-${i}`} className="urgency-chart-value-skeleton" style={{width:`${[13,13,22,52][i]}%`,height:[72,54,34,12][i]}}/>):display.map((r,i)=>(
 <div key={i} onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(h=>h===i?null:h)} style={{width:`${((r.t-r.f+1)/max)*100}%`,height:`${r.gap?4:Math.max(6,(Math.abs(parseFloat(r.d))||0)/maxAbsD*100)}%`,background:colorFor(r),position:'relative',marginRight:i<display.length-1?2:0,borderRadius:4,cursor:'default'}}>
 {hover===i&&<div style={{position:'absolute',bottom:'calc(100% + 8px)',left:'50%',transform:'translateX(-50%)',background:'var(--color-ink-900)',color:'var(--color-white)',fontSize:11,fontWeight:600,padding:'6px 10px',borderRadius:'var(--radius-sm)',whiteSpace:'nowrap',zIndex:5,boxShadow:'var(--shadow-md)'}}>Day {r.f}–{r.t}: {pct(r)}</div>}
 </div>
@@ -34,7 +34,8 @@ return (
 </div>
 <div style={{display:'flex',justifyContent:'space-between',fontSize:10.5,color:'var(--text-muted)',marginBottom:22}}><span>Day 0</span><span>Day {max-1}</span></div>
 <div style={{display:'flex',flexDirection:'column',gap:6}}>
-{display.map((r,i)=>r.gap?(
+{loading&&[0,1,2,3].map(i=><div key={`loading-${i}`} className="urgency-rule-value-skeleton"><span className="field-value-skeleton"/></div>)}
+{!loading&&display.map((r,i)=>r.gap?(
 <div key={'gap'+i} onClick={()=>addGap(r)} style={{borderRadius:'var(--radius-md)',padding:'10px 14px',display:'flex',alignItems:'center',gap:14,background:'rgba(11,12,14,0.03)',cursor:'pointer'}}>
 <span style={{fontSize:12,fontWeight:600,color:'var(--text-muted)',minWidth:90}}>Day {r.f}–{r.t}</span>
 <span style={{fontSize:11.5,color:'var(--text-muted)',flex:1}}>Gap — click to set a discount</span>
@@ -86,10 +87,10 @@ const loadingRangeRef=React.useRef(null);
 const loadingDatesRef=React.useRef(new Set());
 const pendingLeftCompensationRef=React.useRef(0);
 const [loadingDates,setLoadingDates]=React.useState([]);
-const loadCalendarRange=React.useCallback((startValue,endValue)=>{const start=dateString(startValue);const end=dateString(endValue);const requestKey=`${start}:${end}`;if(loadingRangeRef.current===requestKey)return Promise.resolve();loadingRangeRef.current=requestKey;return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties)return;calendarRangeRef.current={start:calendarRangeRef.current.start&&calendarRangeRef.current.start<start?calendarRangeRef.current.start:start,end:calendarRangeRef.current.end&&calendarRangeRef.current.end>end?calendarRangeRef.current.end:end};setCalendarRecords(previous=>{const merged={...previous};(payload.days||[]).forEach(record=>{merged[`${record.property_id}:${record.stay_date}`]=record;});const records=Object.values(merged);const dates=[...new Set(records.map(record=>record.stay_date))].sort();setDays(dates.map(calendarDate));setListings(payload.properties.map((property,index)=>{const propertyRecords=records.filter(record=>String(record.property_id)===String(property.id));const first=propertyRecords.find(record=>record.current_price!=null);return {id:property.id,name:property.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][index%3],base:Number(first?.current_price||0),groupId:property.pricing_group_id,group:property.pricing_group_name||('Pricing group '+property.pricing_group_id),prices:Object.fromEntries(propertyRecords.map(record=>[record.stay_date,Number(record.current_price||0)]))};}));return merged;});}).finally(()=>{loadingRangeRef.current=null;});},[]);
+const loadCalendarRange=React.useCallback((startValue,endValue)=>{const start=dateString(startValue);const end=dateString(endValue);const requestKey=`${start}:${end}`;if(loadingRangeRef.current===requestKey)return Promise.resolve();loadingRangeRef.current=requestKey;return fetch('/api/pricing-calendar?start='+start+'&end='+end).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties)return;calendarRangeRef.current={start:calendarRangeRef.current.start&&calendarRangeRef.current.start<start?calendarRangeRef.current.start:start,end:calendarRangeRef.current.end&&calendarRangeRef.current.end>end?calendarRangeRef.current.end:end};setCalendarRecords(previous=>{const merged={...previous};(payload.days||[]).forEach(record=>{merged[`${record.property_id}:${record.stay_date}`]=record;});const records=Object.values(merged);const dates=[...new Set(records.map(record=>record.stay_date))].sort();setDays(dates.map(calendarDate));setListings(payload.properties.map((property,index)=>{const propertyRecords=records.filter(record=>String(record.property_id)===String(property.id));const first=propertyRecords.find(record=>record.current_price!=null);return {id:property.id,name:property.name,thumbnailUrl:property.thumbnail_url||'',c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][index%3],base:Number(first?.current_price||0),groupId:property.pricing_group_id,group:property.pricing_group_name||('Pricing group '+property.pricing_group_id),prices:Object.fromEntries(propertyRecords.map(record=>[record.stay_date,Number(record.current_price||0)]))};}));return merged;});}).finally(()=>{loadingRangeRef.current=null;});},[]);
 const initialLoad=React.useCallback(()=>loadCalendarRange(shiftDate(new Date(),-7),shiftDate(new Date(),43)),[loadCalendarRange]);
-React.useEffect(()=>{let active=true;Promise.all([initialLoad(),fetch('/api/settings/pricing').then(r=>r.ok?r.json():null),fetch('/api/pricing-groups').then(r=>r.ok?r.json():[])]).then(([,settings,groups])=>{if(active&&settings){setGlobalSettings({minComp:String(settings.minimum_competitor_count),positioning:String(settings.market_positioning_factor),guestToHost:String(settings.guest_to_host_price_factor),minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:settings.urgency_adjustment_enabled?'on':'off',method:settings.base_price_mode==='manual'?'manual':'median',manualBase:settings.manual_base_price?String(settings.manual_base_price):'',rules:normalizeUrgencyRules(settings.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment}))});}if(active){setPricingGroups(groups||[]);setGroupData(Object.fromEntries((groups||[]).map(g=>[g.name,{name:g.name,minComp:g.pricing_settings?.minimum_competitor_count?String(g.pricing_settings.minimum_competitor_count):'',urls:(g.competitor_urls||[]).join('\n')}])));}}).catch(()=>{}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[initialLoad]);
-const visibleListings=listings.filter(l=>l.name.toLowerCase().includes(searchQuery.trim().toLowerCase()));
+React.useEffect(()=>{let active=true;Promise.all([initialLoad(),fetch('/api/settings/pricing',{cache:'no-store'}).then(r=>r.ok?r.json():null),fetch('/api/pricing-groups',{cache:'no-store'}).then(r=>r.ok?r.json():[])]).then(([,settings,groups])=>{if(active&&settings){setGlobalSettings({minComp:String(settings.minimum_competitor_count),positioning:String(settings.market_positioning_factor),guestToHost:String(settings.guest_to_host_price_factor),minIDR:'1',maxIDR:'999999999',step:'50000',useUrgency:settings.urgency_adjustment_enabled?'on':'off',method:settings.base_price_mode==='manual'?'manual':'median',manualBase:settings.manual_base_price?String(settings.manual_base_price):'',rules:normalizeUrgencyRules(settings.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment}))});}if(active){setPricingGroups(groups||[]);setGroupData(Object.fromEntries((groups||[]).map(g=>[g.name,{name:g.name,minComp:g.pricing_settings?.minimum_competitor_count?String(g.pricing_settings.minimum_competitor_count):'',urls:(g.competitor_urls||[]).join('\n')}])));}}).catch(()=>{}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[initialLoad]);
+const visibleListings=listings.filter(l=>l.name.toLowerCase().includes(searchQuery.trim().toLowerCase())).map(l=>({...l,group:pricingGroups.find(g=>String(g.id)===String(l.groupId))?.name||l.group}));
 const groupOrder=[];visibleListings.forEach(l=>{if(!groupOrder.includes(l.group))groupOrder.push(l.group);});
 let rowCursor=3;let propCursor=0;
 const groups=groupOrder.map(gname=>{
@@ -128,8 +129,9 @@ return ()=>document.removeEventListener('mousedown',onDoc);
 },[groupPickerOpen]);
 const [posInfoOpen,setPosInfoOpen]=React.useState(false);
 const activeProperty=selected&&!selected.startsWith('group:')?listings.find(l=>l.name===selected):null;
+const [propertySettingsLoading,setPropertySettingsLoading]=React.useState(false);
 const propFor=(name)=>propertyData[name]||{enabled:true,method:'median',manualBase:'',positioning:'1',minComp:'',useUrgency:'global',urgencyOpen:false,rules:[{f:0,t:3,d:-0.3},{f:4,t:7,d:-0.2},{f:8,t:14,d:-0.1},{f:15,t:30,d:-0.05}],minIDR:'',maxIDR:'',step:''};
-React.useEffect(()=>{if(!activeProperty?.id)return;fetch('/api/settings/pricing/effective/'+activeProperty.id).then(r=>r.ok?r.json():null).then(data=>{if(!data)return;const v=Object.fromEntries(Object.entries(data).map(([key,value])=>[key,effectiveSetting(value)]));setPropertyData(d=>({...d,[activeProperty.name]:{...propFor(activeProperty.name),method:v.base_price_mode==='manual'?'manual':'median',manualBase:v.manual_base_price?String(v.manual_base_price):'',positioning:String(v.market_positioning_factor),minComp:String(v.minimum_competitor_count),useUrgency:v.urgency_adjustment_enabled?'on':'off',rules:normalizeUrgencyRules(v.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment})),minIDR:String(activeProperty.min_price||''),maxIDR:String(activeProperty.max_price||''),step:String(activeProperty.rounding_increment||'')}}));}).catch(()=>{});},[activeProperty?.id]);
+React.useEffect(()=>{if(!activeProperty?.id){setPropertySettingsLoading(false);return;}setPropertySettingsLoading(true);fetch('/api/settings/pricing/effective/'+activeProperty.id).then(r=>r.ok?r.json():null).then(data=>{if(!data)return;const v=Object.fromEntries(Object.entries(data).map(([key,value])=>[key,effectiveSetting(value)]));setPropertyData(d=>({...d,[activeProperty.name]:{...propFor(activeProperty.name),method:v.base_price_mode==='manual'?'manual':'median',manualBase:v.manual_base_price?String(v.manual_base_price):'',positioning:String(v.market_positioning_factor),minComp:String(v.minimum_competitor_count),useUrgency:v.urgency_adjustment_enabled?'on':'off',rules:normalizeUrgencyRules(v.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment})),minIDR:String(activeProperty.min_price||''),maxIDR:String(activeProperty.max_price||''),step:String(activeProperty.rounding_increment||'')}}));}).catch(()=>{}).finally(()=>setPropertySettingsLoading(false));},[activeProperty?.id]);
 const setPropField=(name,field,val)=>setPropertyData(d=>({...d,[name]:{...propFor(name),[field]:val}}));
 const setPropRules=(name,updater)=>setPropertyData(d=>{const cur=propFor(name);const rules=typeof updater==='function'?updater(cur.rules):updater;return {...d,[name]:{...cur,rules}};});
 const saveProperty=(name)=>{
@@ -142,9 +144,25 @@ const saveProperty=(name)=>{
 const [groupData,setGroupData]=React.useState({});
 const defaultGroupUrls=(gname)=>Array.from({length:9},(_,i)=>`https://www.airbnb.com/rooms/${1500000000000+Math.abs(Math.round(Math.sin(gname.length+i*3.1)*99999999999))}`).join('\n');
 const activeGroupName=selected&&selected.startsWith('group:')?selected.slice(6):null;
-const groupFor=(gname)=>groupData[gname]||{name:gname,minComp:'',urls:defaultGroupUrls(gname)};
+const groupFor=(gname)=>groupData[gname]||{name:gname,minComp:'',urls:''};
 const setGroupField=(gname,field,val)=>setGroupData(d=>({...d,[gname]:{...groupFor(gname),[field]:val}}));
-const saveGroup=(gname)=>{const gd=groupFor(gname);const group=pricingGroups.find(g=>g.name===gname);fetch('/api/pricing-groups/'+group.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({name:gd.name,competitor_urls:gd.urls.split('\n').map(u=>u.trim()).filter(Boolean),pricing_settings:gd.minComp?{minimum_competitor_count:Number(gd.minComp)}:{}})}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save pricing group');setToast('Pricing group saved.');setSelected(null);const groups=await fetch('/api/pricing-groups').then(x=>x.json());setPricingGroups(groups);return initialLoad();}).catch(e=>setToast(e.message));};
+const saveGroup=async(gname)=>{
+  const localGroup=pricingGroups.find(g=>g.name===gname);
+  const mappedProperty=listings.find(item=>item.group===gname);
+  const groupId=localGroup?.id||mappedProperty?.groupId;
+  if(!groupId){setToast('Could not identify pricing group.');return;}
+  try{
+    const currentGroup=localGroup||await fetch('/api/pricing-groups').then(async response=>response.ok?response.json():[]).then(items=>items.find(item=>item.id===groupId||item.name===gname));
+    if(!currentGroup){setToast('Could not load pricing group.');return;}
+    const hasLocalData=Object.prototype.hasOwnProperty.call(groupData,gname);
+    const gd=groupFor(gname);
+    const urls=hasLocalData?gd.urls.split('\n').map(u=>u.trim()).filter(Boolean):(currentGroup.competitor_urls||[]);
+    const response=await fetch('/api/pricing-groups/'+groupId,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({name:gd.name.trim()||gname,competitor_urls:urls,pricing_settings:gd.minComp?{minimum_competitor_count:Number(gd.minComp)}:{}})});
+    if(!response.ok)throw new Error((await response.json()).detail||'Could not save pricing group');
+    setToast('Pricing group saved.');setSelected(null);
+    const groups=await fetch('/api/pricing-groups',{cache:'no-store'}).then(x=>x.json());setPricingGroups(groups);return initialLoad();
+  }catch(error){setToast(error.message);}
+};
 const scrollRef=React.useRef(null);
 // Keep the navigation affordances visible during the first layout pass. The
 // scroll measurement updates their enabled state after the calendar mounts,
@@ -346,7 +364,7 @@ return (
 return (
 <React.Fragment key={l.name}>
 <div onClick={()=>setSelected(l.name)} style={{gridColumn:'1',gridRow:l.row,position:'sticky',left:0,zIndex:3,background:selected===l.name?'var(--surface-sunken)':'var(--color-white)',display:'flex',alignItems:'center',gap:12,padding:'12px 20px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
-<div style={{width:44,height:44,borderRadius:'var(--radius-md)',background:l.c,flexShrink:0}} />
+<div style={{width:44,height:44,borderRadius:'var(--radius-md)',background:l.c,flexShrink:0,overflow:'hidden'}}>{l.thumbnailUrl&&<img src={l.thumbnailUrl} alt="" loading="lazy" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}} />}</div>
 <div>
 <div style={{fontWeight:600,fontSize:14,color:'var(--text-primary)'}}>{l.name}</div>
 <div style={{fontSize:12,color:'var(--text-secondary)'}}>IDR (Rp)</div>
@@ -584,7 +602,7 @@ return (
 <IconButton label="Close" onClick={()=>setSelected(null)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} />
 </div>
 <div style={{flex:1,overflow:'auto',padding:'20px 28px',display:'flex',flexDirection:'column',gap:20}}>
-<Switch label="Suggest pricing" checked={pd.enabled} onChange={v=>setPropField(l.name,'enabled',v)} />
+<Switch label="Suggest pricing" loading={propertySettingsLoading} checked={pd.enabled} onChange={v=>setPropField(l.name,'enabled',v)} />
 <div>
 <div style={{fontWeight:700,fontSize:13,color:'var(--text-primary)',marginBottom:12}}>Base price</div>
 <div style={{display:'flex',flexDirection:'column',gap:12}}>
@@ -593,7 +611,7 @@ return (
 <div key={o.value} onClick={()=>setPropField(l.name,'method',o.value)} style={{flex:1,textAlign:'center',padding:'7px 0',borderRadius:'var(--radius-sm)',fontSize:12.5,fontWeight:600,cursor:'pointer',background:pd.method===o.value?'var(--color-white)':'transparent',color:pd.method===o.value?'var(--text-primary)':'var(--text-secondary)',boxShadow:pd.method===o.value?'var(--shadow-sm)':'none',transition:'background var(--duration-fast) var(--ease-standard)'}}>{o.label}</div>
 ))}
 </div>
-{pd.method==='manual'&&<Input label="Manual base price" prefix="Rp" numeric min={1} placeholder="Example: 4,500,000" value={pd.manualBase} onChange={e=>setPropField(l.name,'manualBase',e.target.value)} />}
+{pd.method==='manual'&&<Input loading={propertySettingsLoading} label="Manual base price" prefix="Rp" numeric min={1} placeholder="Example: 4,500,000" value={pd.manualBase} onChange={e=>setPropField(l.name,'manualBase',e.target.value)} />}
 {pd.method==='median'&&<React.Fragment>
 <div>
 <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6,position:'relative'}}>
@@ -601,27 +619,27 @@ return (
 <img src={`https://unpkg.com/lucide-static@latest/icons/${posInfoOpen?'x':'info'}.svg`} onClick={()=>setPosInfoOpen(o=>!o)} style={{width:13,height:13,opacity:0.45,cursor:'pointer'}} />
 {posInfoOpen&&<div style={{position:'absolute',top:'calc(100% + 8px)',left:0,zIndex:10,width:260,background:'var(--color-white)',color:'var(--text-secondary)',border:'1px solid var(--border-default)',fontSize:12,lineHeight:1.5,padding:'10px 12px',borderRadius:'var(--radius-md)',boxShadow:'var(--shadow-lg)'}}>Positioning of this property's price relative to the market median.<br/>Example:<br/>1.1 = 10% above market<br/>0.9 = 10% below market</div>}
 </div>
-<Input numeric min={0.1} max={3} value={pd.positioning} onChange={e=>setPropField(l.name,'positioning',e.target.value)} />
+<Input loading={propertySettingsLoading} numeric min={0.1} max={3} value={pd.positioning} onChange={e=>setPropField(l.name,'positioning',e.target.value)} />
 </div>
-<InputWithSelectField label="Minimum competitor count" value={pd.minComp} onChange={v=>setPropField(l.name,'minComp',v)} options={[{label:'Global: '+globalSettings.minComp,value:'',linked:true}]} />
+<InputWithSelectField loading={propertySettingsLoading} label="Minimum competitor count" value={pd.minComp} onChange={v=>setPropField(l.name,'minComp',v)} options={[{label:'Global: '+globalSettings.minComp,value:'',linked:true}]} />
 </React.Fragment>}
 </div>
 </div>
 <div>
 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
 <div style={{fontWeight:700,fontSize:13,color:'var(--text-primary)'}}>Discounts by days left until stay</div>
-<Switch checked={pd.useUrgency!=='off'} onChange={v=>setPropField(l.name,'useUrgency',v?'on':'off')} />
+<Switch loading={propertySettingsLoading} checked={pd.useUrgency!=='off'} onChange={v=>setPropField(l.name,'useUrgency',v?'on':'off')} />
 </div>
-{pd.useUrgency!=='off'&&<UrgencyRulesEditor rules={pd.rules} setRules={u=>setPropRules(l.name,u)} />}
+{pd.useUrgency!=='off'&&<UrgencyRulesEditor loading={propertySettingsLoading} rules={pd.rules} setRules={u=>setPropRules(l.name,u)} />}
 </div>
 <div>
 <div style={{fontWeight:700,fontSize:13,color:'var(--text-primary)',marginBottom:12}}>Bounds and rounding</div>
 <div style={{display:'flex',flexDirection:'column',gap:12}}>
 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-<InputWithSelectField label="Minimum price" currency value={pd.minIDR} onChange={v=>setPropField(l.name,'minIDR',v)} options={[{label:'Global: '+globalSettings.minIDR,value:'',linked:true}]} />
-<InputWithSelectField label="Maximum price" currency value={pd.maxIDR} onChange={v=>setPropField(l.name,'maxIDR',v)} options={[{label:'Global: '+globalSettings.maxIDR,value:'',linked:true}]} />
+<InputWithSelectField loading={propertySettingsLoading} label="Minimum price" currency value={pd.minIDR} onChange={v=>setPropField(l.name,'minIDR',v)} options={[{label:'Global: '+globalSettings.minIDR,value:'',linked:true}]} />
+<InputWithSelectField loading={propertySettingsLoading} label="Maximum price" currency value={pd.maxIDR} onChange={v=>setPropField(l.name,'maxIDR',v)} options={[{label:'Global: '+globalSettings.maxIDR,value:'',linked:true}]} />
 </div>
-<InputWithSelectField label="Round to nearest" currency value={pd.step} onChange={v=>setPropField(l.name,'step',v)} options={[{label:'Global: '+globalSettings.step,value:'',linked:true}]} />
+<InputWithSelectField loading={propertySettingsLoading} label="Round to nearest" currency value={pd.step} onChange={v=>setPropField(l.name,'step',v)} options={[{label:'Global: '+globalSettings.step,value:'',linked:true}]} />
 </div>
 </div>
 </div>

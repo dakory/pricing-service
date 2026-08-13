@@ -405,6 +405,7 @@ def pricing_calendar(
                 "pricing_group_id": item.pricing_group_id,
                 "pricing_group_name": item.pricing_group.name if item.pricing_group else f"Pricing group {item.pricing_group_id}",
                 "booking_site_listing_id": item.booking_site_listing_id,
+                "thumbnail_url": item.thumbnail_url,
             }
             for item in properties
         ],

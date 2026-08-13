@@ -90,9 +90,12 @@ def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
         if external_id is None:
             raise HostexError("Hostex property is missing id")
         name = str(first_present_value(record, "name", "property_name", "title", default=f"Hostex property {external_id}"))
+        cover = record.get("cover") if isinstance(record.get("cover"), dict) else {}
+        thumbnail_url = first_present_value(cover, "small_url", "large_url", "original_url")
         item = db.scalar(select(Property).where(Property.hostex_property_id == external_id))
         if item:
             item.name = name
+            item.thumbnail_url = thumbnail_url
             updated += 1
         else:
             # Imported properties are deliberately inactive until bounds and rules are reviewed.
@@ -101,6 +104,7 @@ def upsert_properties(db: Session, records: list[dict]) -> tuple[int, int]:
                     name=name,
                     pricing_group_id=default_group.id,
                     hostex_property_id=external_id,
+                    thumbnail_url=thumbnail_url,
                     hostex_listing_id=f"unmapped:{external_id}",
                     active=False,
                     min_price=500_000,
