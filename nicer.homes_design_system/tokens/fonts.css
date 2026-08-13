@@ -1,0 +1,2 @@
+/* Substitution flag: no webfont files were provided with the brand assets (only a logo PNG). The logo's serif has flat, lightly bracketed serifs, a high-set separated dot on the i, and moderate contrast — Lora is the nearest free Google Fonts match. Manrope stands in as a warm, versatile grotesk for UI/body. Swap both for the real brand fonts if/when supplied. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto+Mono:wght@400;500&family=DM+Serif+Display&display=swap');

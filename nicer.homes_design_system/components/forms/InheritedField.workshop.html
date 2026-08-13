@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<title>InheritedField — workshop (fork)</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>body{margin:0;background:var(--color-mist);padding:60px;font-family:var(--font-sans)}#root{max-width:360px}</style>
+</head>
+<body>
+<template id="__bundler_thumbnail"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#0B3B2E"/><text x="50" y="58" font-size="26" fill="#CFF211" text-anchor="middle" font-family="sans-serif">IF</text></svg></template>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel">
+// Forked copy of components/forms/InheritedField.jsx — edits here do NOT affect the design system.
+// Generalized: free-text input as the first option, plus any number of fixed selectable options below (scrollable).
+function ComboField({label,options=[],value,onChange,placeholder='Enter a value'}){
+const [focused,setFocused]=React.useState(false);
+const [activeIdx,setActiveIdx]=React.useState(-1);
+const ref=React.useRef(null);
+const isMatchedOption=options.some(o=>o.value===value);
+const isCustom=value!=null&&value!==''&&!isMatchedOption;
+const selectedOpt=options.find(o=>o.value===value);
+React.useEffect(()=>{
+if(!focused)return;
+const onDoc=(e)=>{if(ref.current&&!ref.current.contains(e.target))setFocused(false);};
+document.addEventListener('mousedown',onDoc);
+return ()=>document.removeEventListener('mousedown',onDoc);
+},[focused]);
+React.useEffect(()=>{if(focused)setActiveIdx(-1);},[focused]);
+const displayLabel=(opt)=>{
+if(!opt.linked)return <span style={{fontSize:14,fontWeight:400,color:'var(--text-secondary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{opt.label}</span>;
+const v=opt.pillVariant||'default';
+if(v==='large')return <span style={{fontSize:14,fontWeight:600,color:'var(--text-primary)',whiteSpace:'nowrap',background:'var(--color-line)',borderRadius:'var(--radius-full)',padding:'7px 14px'}}>{opt.label}</span>;
+if(v==='outline')return <span style={{fontSize:13,fontWeight:600,color:'var(--text-secondary)',whiteSpace:'nowrap',background:'transparent',border:'1px solid var(--border-strong)',borderRadius:'var(--radius-full)',padding:'4px 10px'}}>{opt.label}</span>;
+if(v==='icon')return <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:13,fontWeight:600,color:'var(--text-secondary)',whiteSpace:'nowrap',background:'var(--color-line)',borderRadius:'var(--radius-full)',padding:'5px 12px 5px 8px'}}><img src="https://unpkg.com/lucide-static@latest/icons/link-2.svg" style={{width:12,height:12,opacity:0.6}} />{opt.label}</span>;
+if(v==='accent')return <span style={{fontSize:13,fontWeight:600,color:'var(--action-accent-hover)',whiteSpace:'nowrap',background:'rgba(214,245,26,0.28)',borderRadius:'var(--radius-full)',padding:'4px 10px'}}>{opt.label}</span>;
+return <span style={{fontSize:12.5,fontWeight:600,color:'var(--text-secondary)',whiteSpace:'nowrap',background:'var(--color-line)',borderRadius:'var(--radius-full)',padding:'4px 10px'}}>{opt.label}</span>;
+};
+const selectOption=(opt)=>{onChange&&onChange(opt.value);setFocused(false);};
+const onKeyDown=(e)=>{
+if(e.key==='ArrowDown'){e.preventDefault();setActiveIdx(i=>Math.min(i+1,options.length-1));}
+else if(e.key==='ArrowUp'){e.preventDefault();setActiveIdx(i=>Math.max(i-1,-1));}
+else if(e.key==='Enter'&&activeIdx>=0){e.preventDefault();selectOption(options[activeIdx]);}
+else if(e.key==='Escape'){setFocused(false);}
+};
+const rowStyle=(selected,active)=>({display:'flex',alignItems:'center',justifyContent:'space-between',height:38,padding:'0 20px',flexShrink:0,background:selected?'#F5F5F5':active?'var(--color-mist)':'transparent',cursor:'pointer'});
+return (
+<label style={{display:'flex',flexDirection:'column',gap:6,fontFamily:'var(--font-sans)'}}>
+{label&&<span style={{fontSize:12,fontWeight:600,color:'var(--text-secondary)'}}>{label}</span>}
+<div ref={ref} style={{position:'relative',height:38}}>
+<div style={{position:focused?'absolute':'static',top:0,left:0,right:0,border:'1px solid '+(focused?'var(--focus-ring)':'var(--border-default)'),borderRadius:19,overflow:'hidden',transition:'border-color var(--duration-fast) var(--ease-standard)',background:'var(--color-white)',boxShadow:focused?'var(--shadow-lg)':'none',zIndex:10}}>
+{!focused?
+<div onClick={()=>setFocused(true)} style={{height:38,display:'flex',alignItems:'center',padding:'0 20px',cursor:'text'}}>
+{isCustom?<span style={{fontSize:14,color:'var(--text-primary)'}}>{value}</span>:selectedOpt?displayLabel(selectedOpt):<span style={{fontSize:14,color:'var(--text-muted)'}}>{placeholder}</span>}
+</div>
+:
+<div style={rowStyle(isCustom,activeIdx===-1)} onMouseEnter={()=>setActiveIdx(-1)}>
+<input autoFocus value={isCustom?value:''} onChange={e=>onChange&&onChange(e.target.value)} onFocus={()=>setFocused(true)} onKeyDown={onKeyDown} placeholder={placeholder} style={{border:'none',outline:'none',background:'transparent',fontSize:14,fontWeight:400,fontFamily:'var(--font-sans)',color:'var(--text-primary)',width:'100%',padding:0,margin:0}} />
+{isCustom&&<img src="https://unpkg.com/lucide-static@latest/icons/check.svg" style={{width:14,height:14,opacity:0.5,flexShrink:0}} />}
+</div>}
+{focused&&options.length>0&&<div style={{maxHeight:38*4,overflowY:'auto'}}>
+{options.map((opt,i)=>{
+const selected=opt.value===value;
+return (
+<div key={opt.value} onMouseDown={e=>{e.preventDefault();selectOption(opt);}} onMouseEnter={()=>setActiveIdx(i)} style={rowStyle(selected,activeIdx===i)}>
+{displayLabel(opt)}
+{selected&&<img src="https://unpkg.com/lucide-static@latest/icons/check.svg" style={{width:14,height:14,opacity:0.5,flexShrink:0}} />}
+</div>);
+})}
+</div>}
+</div>
+</div>
+</label>);
+}
+function InheritedFieldFork({label,globalValue,value,onChange,placeholder='Enter a value',pillVariant}){
+return <ComboField label={label} value={value} onChange={onChange} placeholder={placeholder} options={[{label:'Global: '+globalValue,value:'',linked:true,pillVariant}]} />;
+}
+function Demo(){
+const [a,setA]=React.useState('');
+const [b,setB]=React.useState('4');
+const [c,setC]=React.useState('');
+const [v1,setV1]=React.useState(''),[v2,setV2]=React.useState(''),[v3,setV3]=React.useState(''),[v4,setV4]=React.useState(''),[v5,setV5]=React.useState('');
+return (
+<div style={{display:'flex',flexDirection:'column',gap:24}}>
+<InheritedFieldFork label="Minimum competitor count" globalValue="3" value={a} onChange={setA} />
+<InheritedFieldFork label="Market positioning factor" globalValue="1" value={b} onChange={setB} />
+<ComboField label="Pricing group" value={c} onChange={setC} placeholder="Custom group name" options={[
+{label:'Beachfront Collection',value:'Beachfront Collection'},
+{label:'Ubud Retreats',value:'Ubud Retreats'},
+{label:'Canggu Villas',value:'Canggu Villas'},
+{label:'Uluwatu Cliffside',value:'Uluwatu Cliffside'},
+{label:'Seminyak Central',value:'Seminyak Central'},
+]} />
+<div style={{height:1,background:'var(--border-default)',margin:'8px 0'}} />
+<div style={{fontSize:12,fontWeight:700,color:'var(--text-muted)',textTransform:'uppercase',letterSpacing:'0.03em'}}>Linked value — 5 pill variants</div>
+<InheritedFieldFork label="1. Default" globalValue="3" value={v1} onChange={setV1} pillVariant="default" />
+<InheritedFieldFork label="2. Large" globalValue="3" value={v2} onChange={setV2} pillVariant="large" />
+<InheritedFieldFork label="3. Outline" globalValue="3" value={v3} onChange={setV3} pillVariant="outline" />
+<InheritedFieldFork label="4. Icon" globalValue="3" value={v4} onChange={setV4} pillVariant="icon" />
+<InheritedFieldFork label="5. Accent tint" globalValue="3" value={v5} onChange={setV5} pillVariant="accent" />
+<div style={{height:38,display:'flex',alignItems:'center',color:'var(--text-muted)',fontSize:13}}>Content below — should not move</div>
+</div>);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>
+</body></html>
