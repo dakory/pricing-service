@@ -1,4 +1,15 @@
 :root {
+  /* Embedded design-system tokens: dashboard is built from the standalone
+     dashboard Docker context, so these tokens must be available locally. */
+  --color-white:#ffffff; --color-mist:#fafafb; --color-line:#e7e8eb;
+  --color-ink-900:#0b0c0e; --color-ink-600:#565961; --color-ink-400:#9599a1; --color-ink-200:#c7cad0;
+  --color-accent-300:#a9a0fa; --color-accent-500:#2711f2; --color-accent-700:#1b0ca9;
+  --color-success-500:#2fb37b; --color-success-700:#1f7a53; --color-danger:#e5484d;
+  --surface-page:var(--color-white); --surface-card:rgba(255,255,255,0.66); --surface-card-solid:var(--color-white); --surface-sunken:var(--color-mist); --surface-inverse:var(--color-ink-900);
+  --border-default:var(--color-line); --border-strong:var(--color-ink-200); --text-primary:var(--color-ink-900); --text-secondary:var(--color-ink-600); --text-muted:var(--color-ink-400); --text-inverse:var(--color-white);
+  --action-primary:var(--color-ink-900); --action-primary-hover:#000000; --action-secondary:var(--color-white); --action-secondary-hover:var(--color-mist); --action-accent:var(--color-accent-500); --action-accent-hover:var(--color-accent-700); --action-accent-soft:rgba(214,245,26,0.18); --action-accent-ink:var(--color-ink-900); --focus-ring:var(--color-accent-700); --status-success:var(--color-success-500); --status-success-soft:rgba(47,179,123,0.12); --status-danger:var(--color-danger);
+  --radius-sm:6px; --radius-md:10px; --radius-lg:18px; --radius-xl:26px; --radius-full:999px; --shadow-sm:0 1px 2px rgba(11,12,14,0.04); --shadow-md:0 8px 24px rgba(11,12,14,0.06); --shadow-lg:0 24px 60px rgba(11,12,14,0.10); --glow-accent:0 0 0 1px rgba(170,204,0,0.35),0 12px 32px rgba(214,245,26,0.35);
+  --font-display:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; --font-sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; --font-mono:'Roboto Mono','SFMono-Regular',Consolas,monospace; --font-logo:'DM Serif Display',serif; --color-logo-text:var(--color-ink-900);
   --ink: #17332d;
   --muted: #687a74;
   --paper: #f4f0e8;
