@@ -66,6 +66,9 @@ function normalizeUrgencyRules(value){
   }
   return [];
 }
+function effectiveSetting(value){
+  return value&&typeof value==='object'&&Object.prototype.hasOwnProperty.call(value,'value')?value.value:value;
+}
 function Pricing(){
 const [days,setDays]=React.useState([]);
 const [listings,setListings]=React.useState([]);
@@ -116,7 +119,7 @@ return ()=>document.removeEventListener('mousedown',onDoc);
 const [posInfoOpen,setPosInfoOpen]=React.useState(false);
 const activeProperty=selected&&!selected.startsWith('group:')?listings.find(l=>l.name===selected):null;
 const propFor=(name)=>propertyData[name]||{enabled:true,method:'median',manualBase:'',positioning:'1',minComp:'',useUrgency:'global',urgencyOpen:false,rules:[{f:0,t:3,d:-0.3},{f:4,t:7,d:-0.2},{f:8,t:14,d:-0.1},{f:15,t:30,d:-0.05}],minIDR:'',maxIDR:'',step:''};
-React.useEffect(()=>{if(!activeProperty?.id)return;fetch('/api/settings/pricing/effective/'+activeProperty.id).then(r=>r.ok?r.json():null).then(data=>{if(!data)return;const v=data.values||data;setPropertyData(d=>({...d,[activeProperty.name]:{...propFor(activeProperty.name),method:v.base_price_mode==='manual'?'manual':'median',manualBase:v.manual_base_price?String(v.manual_base_price):'',positioning:String(v.market_positioning_factor),minComp:String(v.minimum_competitor_count),useUrgency:v.urgency_adjustment_enabled?'on':'off',rules:normalizeUrgencyRules(v.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment})),minIDR:String(activeProperty.min_price||''),maxIDR:String(activeProperty.max_price||''),step:String(activeProperty.rounding_increment||'')}}));}).catch(()=>{});},[activeProperty?.id]);
+React.useEffect(()=>{if(!activeProperty?.id)return;fetch('/api/settings/pricing/effective/'+activeProperty.id).then(r=>r.ok?r.json():null).then(data=>{if(!data)return;const v=Object.fromEntries(Object.entries(data).map(([key,value])=>[key,effectiveSetting(value)]));setPropertyData(d=>({...d,[activeProperty.name]:{...propFor(activeProperty.name),method:v.base_price_mode==='manual'?'manual':'median',manualBase:v.manual_base_price?String(v.manual_base_price):'',positioning:String(v.market_positioning_factor),minComp:String(v.minimum_competitor_count),useUrgency:v.urgency_adjustment_enabled?'on':'off',rules:normalizeUrgencyRules(v.urgency_adjustments).map(r=>({f:r.minimum_days,t:r.maximum_days,d:r.adjustment})),minIDR:String(activeProperty.min_price||''),maxIDR:String(activeProperty.max_price||''),step:String(activeProperty.rounding_increment||'')}}));}).catch(()=>{});},[activeProperty?.id]);
 const setPropField=(name,field,val)=>setPropertyData(d=>({...d,[name]:{...propFor(name),[field]:val}}));
 const setPropRules=(name,updater)=>setPropertyData(d=>{const cur=propFor(name);const rules=typeof updater==='function'?updater(cur.rules):updater;return {...d,[name]:{...cur,rules}};});
 const saveProperty=(name)=>{
