@@ -33,7 +33,7 @@ export default async function Runs() {
   const runs = await loadRuns();
   return <Shell>
     <h1>Activity</h1>
-    <p className="muted">Imports, competitor collection, optimization, publishing, and reconciliation. Reload this page to refresh running jobs.</p>
+    <p className="muted">Imports, competitor collection, recommendations, publishing and reconciliation.</p>
     {runs.length ? <div className="card calendar"><table>
       <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Started</th><th>Finished</th><th>Result</th></tr></thead>
       <tbody>{runs.map(run => <tr key={run.id}>

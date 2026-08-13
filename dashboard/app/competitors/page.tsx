@@ -23,8 +23,8 @@ export default async function Competitors() {
     ? allRuns.filter((run: { kind: string }) => run.kind === "scrape")
     : [];
   return <Shell>
-    <h1>Competitor collection</h1>
-    <p className="muted">Calendar collection runs first, followed by backend-planned quote batches. Precise prices are fresh for 24 hours; rough prices refresh monthly.</p>
+    <div className="eyebrow">Portfolio</div><h1>Competitor freshness</h1>
+    <p className="muted">Monitor competitor availability, minNights and price freshness by pricing group.</p>
     <CompetitorScrapePanel competitors={competitors} initialRuns={runs}/>
   </Shell>;
 }
