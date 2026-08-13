@@ -86,7 +86,7 @@ const [actionsOpen,setActionsOpen]=React.useState(false);
 const [globalOpen,setGlobalOpen]=React.useState(false);
 const [globalSettings,setGlobalSettings]=React.useState({minComp:'3',positioning:'1',guestToHost:'0.839',minIDR:'900,000',maxIDR:'1,800,000',step:'1,000',useUrgency:'on',method:'median',manualBase:'',rules:[{f:0,t:3,d:-0.3},{f:4,t:7,d:-0.2},{f:8,t:14,d:-0.1},{f:15,t:30,d:-0.05}]});
 const setGlobalField=(field,val)=>setGlobalSettings(s=>({...s,[field]:val}));
-const saveGlobal=()=>{setToast('Global settings saved.');setTimeout(()=>setToast(null),2600);setGlobalOpen(false);};
+const saveGlobal=()=>{const min=Number(String(globalSettings.minIDR).replace(/,/g,''));const max=Number(String(globalSettings.maxIDR).replace(/,/g,''));const step=Number(String(globalSettings.step).replace(/,/g,''));if(!min||!max||min>max||!step){setToast('Check minimum, maximum, and rounding values.');setTimeout(()=>setToast(null),2600);return;}setToast('Global settings saved.');setTimeout(()=>setToast(null),2600);setGlobalOpen(false);};
 const [tooltipData,setTooltipData]=React.useState(null);
 const [priceOverrides,setPriceOverrides]=React.useState({});
 const [rangePriceInput,setRangePriceInput]=React.useState('');
@@ -106,7 +106,7 @@ const activeProperty=selected&&!selected.startsWith('group:')?listings.find(l=>l
 const propFor=(name)=>propertyData[name]||{enabled:true,method:'median',manualBase:'',positioning:'1',minComp:'',useUrgency:'global',urgencyOpen:false,rules:[{f:0,t:3,d:-0.3},{f:4,t:7,d:-0.2},{f:8,t:14,d:-0.1},{f:15,t:30,d:-0.05}],minIDR:'',maxIDR:'',step:''};
 const setPropField=(name,field,val)=>setPropertyData(d=>({...d,[name]:{...propFor(name),[field]:val}}));
 const setPropRules=(name,updater)=>setPropertyData(d=>{const cur=propFor(name);const rules=typeof updater==='function'?updater(cur.rules):updater;return {...d,[name]:{...cur,rules}};});
-const saveProperty=(name)=>{setToast('Property settings saved.');setTimeout(()=>setToast(null),2600);setSelected(null);};
+const saveProperty=(name)=>{const pd=propFor(name);const min=Number(String(pd.minIDR).replace(/,/g,''));const max=Number(String(pd.maxIDR).replace(/,/g,''));if(pd.minIDR&&pd.maxIDR&&min>max){setToast('Minimum price cannot exceed maximum price.');setTimeout(()=>setToast(null),2600);return;}setToast('Property settings saved.');setTimeout(()=>setToast(null),2600);setSelected(null);};
 const [groupData,setGroupData]=React.useState({});
 const defaultGroupUrls=(gname)=>Array.from({length:9},(_,i)=>`https://www.airbnb.com/rooms/${1500000000000+Math.abs(Math.round(Math.sin(gname.length+i*3.1)*99999999999))}`).join('\n');
 const activeGroupName=selected&&selected.startsWith('group:')?selected.slice(6):null;
@@ -278,7 +278,7 @@ const edgeTop=(isAnchor||inRange)&&l.propIndex===(rangeSelection?rangeSelection.
 const edgeBottom=(isAnchor||inRange)&&l.propIndex===(rangeSelection?rangeSelection.maxProp:l.propIndex);
 const edgeLeft=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.minDay:i);
 const edgeRight=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.maxDay:i);
-const cellBg=isAnchor?'var(--action-accent-soft)':inRange?'rgba(207,242,17,0.16)':isHover?'rgba(11,12,14,0.04)':selected===l.name?'var(--surface-sunken)':'var(--color-white)';
+const cellBg=isAnchor?'var(--action-accent-soft)':inRange?'var(--action-accent-soft)':isHover?'rgba(11,12,14,0.04)':selected===l.name?'var(--surface-sunken)':'var(--color-white)';
 return (
 <div key={i} onClick={()=>handleCellClick(l.propIndex,i)} data-cell-key={cellKey} data-diff={diff} data-cur={cur} data-breakdown={breakdown?JSON.stringify(breakdown):''} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
 <div>{cur.toLocaleString('en-US')}</div>
@@ -353,7 +353,7 @@ return (
 </div>
 <IconButton label="Close" onClick={clearRange} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} />
 </div>
-<Input label="Nightly price" prefix="Rp" placeholder="e.g. 4,500,000" value={rangePriceInput} onChange={e=>setRangePriceInput(e.target.value)} />
+<Input label="Nightly price" prefix="Rp" numeric min={1} placeholder="e.g. 4,500,000" value={rangePriceInput} onChange={e=>setRangePriceInput(e.target.value)} />
 <Button variant="accent" size="sm" style={{width:'100%',marginTop:16}} onClick={saveRangePrice}>Save</Button>
 </div>, document.body)}
 {ReactDOM.createPortal(
@@ -369,7 +369,7 @@ return (
 </div>
 <div style={{flex:1,overflow:'auto',padding:'20px 28px',display:'flex',flexDirection:'column',gap:20}}>
 <div>
-<Input label="Guest-to-host factor" value={globalSettings.guestToHost} onChange={e=>setGlobalField('guestToHost',e.target.value)} />
+<Input label="Guest-to-host factor" numeric min={0.01} max={1} value={globalSettings.guestToHost} onChange={e=>setGlobalField('guestToHost',e.target.value)} />
 <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:6}}>Converts Airbnb guest median to estimated host revenue.</div>
 </div>
 <div>
@@ -380,10 +380,10 @@ return (
 <div key={o.value} onClick={()=>setGlobalField('method',o.value)} style={{flex:1,textAlign:'center',padding:'7px 0',borderRadius:'var(--radius-sm)',fontSize:12.5,fontWeight:600,cursor:'pointer',background:globalSettings.method===o.value?'var(--color-white)':'transparent',color:globalSettings.method===o.value?'var(--text-primary)':'var(--text-secondary)',boxShadow:globalSettings.method===o.value?'var(--shadow-sm)':'none',transition:'background var(--duration-fast) var(--ease-standard)'}}>{o.label}</div>
 ))}
 </div>
-{globalSettings.method==='manual'&&<Input label="Manual base price" placeholder="Example: 4,500,000" value={globalSettings.manualBase} onChange={e=>setGlobalField('manualBase',e.target.value)} />}
+{globalSettings.method==='manual'&&<Input label="Manual base price" prefix="Rp" numeric min={1} placeholder="Example: 4,500,000" value={globalSettings.manualBase} onChange={e=>setGlobalField('manualBase',e.target.value)} />}
 {globalSettings.method==='median'&&<React.Fragment>
-<Input label="Market positioning factor" value={globalSettings.positioning} onChange={e=>setGlobalField('positioning',e.target.value)} />
-<Input label="Minimum competitor count" value={globalSettings.minComp} onChange={e=>setGlobalField('minComp',e.target.value)} />
+<Input label="Market positioning factor" numeric min={0.1} max={3} value={globalSettings.positioning} onChange={e=>setGlobalField('positioning',e.target.value)} />
+<Input label="Minimum competitor count" numeric integer min={1} max={30} value={globalSettings.minComp} onChange={e=>setGlobalField('minComp',e.target.value)} />
 </React.Fragment>}
 </div>
 </div>
@@ -398,10 +398,10 @@ return (
 <div style={{fontWeight:700,fontSize:13,color:'var(--text-primary)',marginBottom:12}}>Bounds and rounding</div>
 <div style={{display:'flex',flexDirection:'column',gap:12}}>
 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-<Input label="Minimum price" value={globalSettings.minIDR} onChange={e=>setGlobalField('minIDR',e.target.value)} />
-<Input label="Maximum price" value={globalSettings.maxIDR} onChange={e=>setGlobalField('maxIDR',e.target.value)} />
+<Input label="Minimum price" prefix="Rp" numeric min={1} value={globalSettings.minIDR} onChange={e=>setGlobalField('minIDR',e.target.value)} />
+<Input label="Maximum price" prefix="Rp" numeric min={1} value={globalSettings.maxIDR} onChange={e=>setGlobalField('maxIDR',e.target.value)} />
 </div>
-<Input label="Round to nearest" value={globalSettings.step} onChange={e=>setGlobalField('step',e.target.value)} />
+<Input label="Round to nearest" prefix="Rp" numeric min={1} value={globalSettings.step} onChange={e=>setGlobalField('step',e.target.value)} />
 </div>
 </div>
 </div>
@@ -502,7 +502,7 @@ return (
 <div key={o.value} onClick={()=>setPropField(l.name,'method',o.value)} style={{flex:1,textAlign:'center',padding:'7px 0',borderRadius:'var(--radius-sm)',fontSize:12.5,fontWeight:600,cursor:'pointer',background:pd.method===o.value?'var(--color-white)':'transparent',color:pd.method===o.value?'var(--text-primary)':'var(--text-secondary)',boxShadow:pd.method===o.value?'var(--shadow-sm)':'none',transition:'background var(--duration-fast) var(--ease-standard)'}}>{o.label}</div>
 ))}
 </div>
-{pd.method==='manual'&&<Input label="Manual base price" placeholder="Example: 4,500,000" value={pd.manualBase} onChange={e=>setPropField(l.name,'manualBase',e.target.value)} />}
+{pd.method==='manual'&&<Input label="Manual base price" prefix="Rp" numeric min={1} placeholder="Example: 4,500,000" value={pd.manualBase} onChange={e=>setPropField(l.name,'manualBase',e.target.value)} />}
 {pd.method==='median'&&<React.Fragment>
 <div>
 <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6,position:'relative'}}>
@@ -510,7 +510,7 @@ return (
 <img src={`https://unpkg.com/lucide-static@latest/icons/${posInfoOpen?'x':'info'}.svg`} onClick={()=>setPosInfoOpen(o=>!o)} style={{width:13,height:13,opacity:0.45,cursor:'pointer'}} />
 {posInfoOpen&&<div style={{position:'absolute',top:'calc(100% + 8px)',left:0,zIndex:10,width:260,background:'var(--color-white)',color:'var(--text-secondary)',border:'1px solid var(--border-default)',fontSize:12,lineHeight:1.5,padding:'10px 12px',borderRadius:'var(--radius-md)',boxShadow:'var(--shadow-lg)'}}>Positioning of this property's price relative to the market median.<br/>Example:<br/>1.1 = 10% above market<br/>0.9 = 10% below market</div>}
 </div>
-<Input value={pd.positioning} onChange={e=>setPropField(l.name,'positioning',e.target.value)} />
+<Input numeric min={0.1} max={3} value={pd.positioning} onChange={e=>setPropField(l.name,'positioning',e.target.value)} />
 </div>
 <InputWithSelectField label="Minimum competitor count" value={pd.minComp} onChange={v=>setPropField(l.name,'minComp',v)} options={[{label:'Global: '+globalSettings.minComp,value:'',linked:true}]} />
 </React.Fragment>}
@@ -527,10 +527,10 @@ return (
 <div style={{fontWeight:700,fontSize:13,color:'var(--text-primary)',marginBottom:12}}>Bounds and rounding</div>
 <div style={{display:'flex',flexDirection:'column',gap:12}}>
 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-<InputWithSelectField label="Minimum price" value={pd.minIDR} onChange={v=>setPropField(l.name,'minIDR',v)} options={[{label:'Global: '+globalSettings.minIDR,value:'',linked:true}]} />
-<InputWithSelectField label="Maximum price" value={pd.maxIDR} onChange={v=>setPropField(l.name,'maxIDR',v)} options={[{label:'Global: '+globalSettings.maxIDR,value:'',linked:true}]} />
+<InputWithSelectField label="Minimum price" currency value={pd.minIDR} onChange={v=>setPropField(l.name,'minIDR',v)} options={[{label:'Global: '+globalSettings.minIDR,value:'',linked:true}]} />
+<InputWithSelectField label="Maximum price" currency value={pd.maxIDR} onChange={v=>setPropField(l.name,'maxIDR',v)} options={[{label:'Global: '+globalSettings.maxIDR,value:'',linked:true}]} />
 </div>
-<InputWithSelectField label="Round to nearest" value={pd.step} onChange={v=>setPropField(l.name,'step',v)} options={[{label:'Global: '+globalSettings.step,value:'',linked:true}]} />
+<InputWithSelectField label="Round to nearest" currency value={pd.step} onChange={v=>setPropField(l.name,'step',v)} options={[{label:'Global: '+globalSettings.step,value:'',linked:true}]} />
 </div>
 </div>
 </div>
