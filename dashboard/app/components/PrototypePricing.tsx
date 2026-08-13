@@ -58,13 +58,10 @@ return Array.from({length:n},(_,i)=>{const d=new Date(start);d.setDate(start.get
 }
 function monthLabel(d){return d.toLocaleDateString('en-US',{month:'long',year:'numeric'});}
 function Pricing(){
-const [days,setDays]=React.useState(genDays(28));
-const [listings,setListings]=React.useState([
-{name:'Villa Kayu',c:'var(--color-accent-300)',base:4850000,group:'Beachfront Collection'},
-{name:'Villa Alang',c:'var(--color-mist)',base:3200000,group:'Beachfront Collection'},
-{name:'Rumah Terang',c:'var(--color-ink-200)',base:5400000,group:'Ubud Retreats'},
-]);
-React.useEffect(()=>{fetch('/api/pricing-calendar?start='+new Date().toISOString().slice(0,10)+'&end='+new Date(Date.now()+27*86400000).toISOString().slice(0,10)).then(r=>r.ok?r.json():null).then(payload=>{if(!payload?.properties)return;const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),group:'Pricing group '+p.pricing_group_id,prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));}).catch(()=>{});},[]);
+const [days,setDays]=React.useState([]);
+const [listings,setListings]=React.useState([]);
+const [calendarLoading,setCalendarLoading]=React.useState(true);
+React.useEffect(()=>{let active=true;fetch('/api/pricing-calendar?start='+new Date().toISOString().slice(0,10)+'&end='+new Date(Date.now()+27*86400000).toISOString().slice(0,10)).then(r=>r.ok?r.json():null).then(payload=>{if(!active)return;if(!payload?.properties){setDays([]);setListings([]);return;}const dates=(payload.days||[]).map(d=>d.stay_date).filter((d,i,a)=>a.indexOf(d)===i);setDays(dates.map(d=>new Date(d+'T00:00:00Z')));setListings(payload.properties.map((p,i)=>({name:p.name,c:['var(--color-accent-300)','var(--color-mist)','var(--color-ink-200)'][i%3],base:Number((payload.days||[]).find(d=>d.property_id===p.id)?.current_price||0),group:'Pricing group '+p.pricing_group_id,prices:Object.fromEntries((payload.days||[]).filter(d=>d.property_id===p.id).map(d=>[d.stay_date,Number(d.current_price||0)]))})));}).catch(()=>{if(active){setDays([]);setListings([]);}}).finally(()=>{if(active)setCalendarLoading(false);});return()=>{active=false;};},[]);
 const groupOrder=[];listings.forEach(l=>{if(!groupOrder.includes(l.group))groupOrder.push(l.group);});
 let rowCursor=3;let propCursor=0;
 const groups=groupOrder.map(gname=>{
@@ -225,6 +222,7 @@ return (
 </div>
 {toast&&<div style={{position:'absolute',top:20,right:24,zIndex:20}}><Toast tone="success" onClose={()=>setToast(null)}>{toast}</Toast></div>}
 <div style={{flex:1,position:'relative',minHeight:0,minWidth:0}}>
+{calendarLoading&&<div style={{position:'absolute',inset:0,zIndex:10,display:'grid',placeItems:'center',background:'var(--color-white)'}}><span style={{fontSize:13,color:'var(--text-muted)'}}>Loading calendar…</span></div>}
 <div ref={scrollRef} onScroll={updateScrollState} onMouseMove={e=>{lastPointer.current={x:e.clientX,y:e.clientY};updateHoverFromPointer(e.clientX,e.clientY);}} onMouseLeave={()=>{setHoverCellKey(null);setTooltipData(null);}} style={{height:'100%',overflow:'auto'}}>
 <div style={{display:'grid',gridTemplateColumns:cols,minWidth:'fit-content'}}>
 <div style={{gridColumn:'1',gridRow:1,position:'sticky',left:0,top:0,zIndex:4,background:'var(--color-white)',padding:'20px 20px 12px',height:48,boxSizing:'border-box',display:'flex',alignItems:'center'}}>
