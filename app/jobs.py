@@ -439,13 +439,9 @@ def generate_price_recommendations(
 
 
 def publishing_enabled(db: Session, today: date) -> bool:
-    """Return whether production mode has reached its activation date."""
+    """Return whether publishing is available in the single application mode."""
 
-    setting = db.get(Setting, "mode")
-    if not setting or setting.value.get("mode") != "production":
-        return False
-    activation = setting.value.get("activation_date")
-    return bool(activation and date.fromisoformat(activation) <= today)
+    return True
 
 
 async def publish_recommendations(db: Session) -> int:

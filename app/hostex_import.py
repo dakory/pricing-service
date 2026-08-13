@@ -310,3 +310,51 @@ async def import_hostex(db: Session, client: HostexClient, *, today: date | None
             "received": sum(1 for _ in calendar_nights(calendar_records)),
         },
     }
+
+
+async def import_booking_site_calendars(
+    db: Session,
+    client: HostexClient,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict:
+    """Refresh only active BookingSite calendars without a full Hostex import."""
+
+    start_date = start_date or date.today()
+    end_date = end_date or start_date + timedelta(days=365)
+    if end_date < start_date:
+        raise ValueError("end_date must not precede start_date")
+
+    rows = db.scalars(
+        select(HostexListing)
+        .join(Property, HostexListing.property_id == Property.id)
+        .where(
+            HostexListing.channel_type == "booking_site",
+            Property.active.is_(True),
+        )
+        .order_by(HostexListing.listing_id)
+    ).all()
+    listings = [
+        {"listing_id": row.listing_id, "channel_type": row.channel_type}
+        for row in rows
+    ]
+    calendar_records: list[dict] = []
+    for offset in range(0, len(listings), 20):
+        calendar_records.extend(
+            await client.calendars(listings[offset : offset + 20], start_date, end_date)
+        )
+    counts = upsert_calendars(db, calendar_records)
+    db.commit()
+    return {
+        "scope": "booking_site",
+        "start_date": start_date,
+        "end_date": end_date,
+        "listings": len(listings),
+        "calendar": {
+            "created": counts[0],
+            "updated": counts[1],
+            "skipped": counts[2],
+            "received": sum(1 for _ in calendar_nights(calendar_records)),
+        },
+    }

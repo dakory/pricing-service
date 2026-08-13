@@ -28,7 +28,7 @@ from app.competitor_scrapes import (
 from app.competitors import sync_group_competitor_listings
 from app.database import get_database_session
 from app.hostex import HostexClient, HostexError
-from app.hostex_import import import_hostex
+from app.hostex_import import import_booking_site_calendars, import_hostex
 from app.jobs import generate_price_recommendations, pricing_configuration, serialized_run
 from app.models import (
     AdminSession,
@@ -55,7 +55,6 @@ from app.schemas import (
     CompetitorCalendarCallback,
     CompetitorQuoteBatchCallback,
     CompetitorScrapeCreate,
-    ModeUpdate,
     OverrideCreate,
     PriceAnchorCreate,
     PricingConfiguration,
@@ -282,19 +281,138 @@ def recommendation_calendar(
     ]
 
 
-@router.post("/pricing/run", dependencies=[Depends(require_csrf)])
-def run_shadow_pricing(db: Session = Depends(get_database_session)):
-    """Generate recommendations without publishing any Hostex changes."""
+@router.get("/pricing-calendar", dependencies=[Depends(require_session)])
+def pricing_calendar(
+    start: date = Query(default_factory=date.today),
+    end: date | None = None,
+    db: Session = Depends(get_database_session),
+):
+    """Return the complete BookingSite calendar used by the redesigned dashboard."""
 
-    mode = db.get(Setting, "mode")
-    if mode and mode.value.get("mode") != "shadow":
-        raise HTTPException(409, "Manual pricing tests are only allowed in shadow mode")
+    end = end or (start + timedelta(days=43))
+    if end < start or (end - start).days > 59:
+        raise HTTPException(422, "Date range must be between 0 and 59 days")
+
+    properties = db.scalars(
+        select(Property).where(Property.active.is_(True)).order_by(Property.name)
+    ).all()
+    property_ids = [item.id for item in properties]
+    if not property_ids:
+        return {"start": start, "end": end, "properties": [], "days": []}
+
+    calendars = db.scalars(
+        select(HostexCalendarDay).where(
+            HostexCalendarDay.property_id.in_(property_ids),
+            HostexCalendarDay.channel_type == "booking_site",
+            HostexCalendarDay.stay_date.between(start, end),
+        )
+    ).all()
+    recommendations = db.scalars(
+        select(Recommendation).where(
+            Recommendation.property_id.in_(property_ids),
+            Recommendation.stay_date.between(start, end),
+        )
+    ).all()
+    overrides = db.scalars(
+        select(Override).where(
+            Override.property_id.in_(property_ids),
+            Override.start_date <= end,
+            Override.end_date >= start,
+        )
+    ).all()
+    anchors = db.scalars(
+        select(PriceAnchor).where(
+            PriceAnchor.property_id.in_(property_ids),
+            PriceAnchor.stay_date.between(start, end),
+        )
+    ).all()
+    calendar_by_key = {(row.property_id, row.stay_date): row for row in calendars}
+    recommendation_by_key = {(row.property_id, row.stay_date): row for row in recommendations}
+    anchor_by_key = {(row.property_id, row.stay_date): row for row in anchors}
+    overrides_by_property = {}
+    for override in overrides:
+        overrides_by_property.setdefault(override.property_id, []).append(override)
+
+    days = []
+    cursor = start
+    while cursor <= end:
+        for property_item in properties:
+            key = (property_item.id, cursor)
+            calendar = calendar_by_key.get(key)
+            recommendation = recommendation_by_key.get(key)
+            override = next(
+                (item for item in overrides_by_property.get(property_item.id, [])
+                 if item.start_date <= cursor <= item.end_date),
+                None,
+            )
+            anchor = anchor_by_key.get(key)
+            current_price = calendar.price if calendar else None
+            available = bool(calendar and (calendar.inventory is None or calendar.inventory > 0))
+            recommended_price = recommendation.recommended_price if recommendation else None
+            difference = (
+                recommended_price - current_price
+                if recommended_price is not None and current_price is not None
+                else None
+            )
+            days.append({
+                "property_id": property_item.id,
+                "property_name": property_item.name,
+                "pricing_group_id": property_item.pricing_group_id,
+                "stay_date": cursor,
+                "available": available,
+                "inventory": calendar.inventory if calendar else None,
+                "minimum_stay": calendar.minimum_stay if calendar else None,
+                "current_price": current_price,
+                "recommended_price": recommended_price,
+                "published_price": recommendation.published_price if recommendation else None,
+                "difference": difference,
+                "difference_percentage": (
+                    difference / current_price
+                    if difference is not None and current_price
+                    else None
+                ),
+                "override": None if override is None else {
+                    "id": override.id,
+                    "price": override.price,
+                    "start_date": override.start_date,
+                    "end_date": override.end_date,
+                    "reason": override.reason,
+                },
+                "anchor": None if anchor is None else {
+                    "id": anchor.id,
+                    "source_type": anchor.source_type,
+                    "source_price": anchor.source_price,
+                },
+                "warnings": recommendation.explanation.get("warnings", []) if recommendation else [],
+                "explanation": recommendation.explanation if recommendation else {},
+            })
+        cursor += timedelta(days=1)
+
+    return {
+        "start": start,
+        "end": end,
+        "properties": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "pricing_group_id": item.pricing_group_id,
+                "booking_site_listing_id": item.booking_site_listing_id,
+            }
+            for item in properties
+        ],
+        "days": days,
+    }
+
+
+@router.post("/pricing/run", dependencies=[Depends(require_csrf)])
+def run_pricing(db: Session = Depends(get_database_session)):
+    """Generate pricing recommendations without publishing Hostex changes."""
     with serialized_run(db, RunKind.optimize) as run:
         if run is None:
             raise HTTPException(409, "Another serialized job is running")
         count = generate_price_recommendations(db)
-        run.summary = {"optimized": count, "published": 0, "mode": "shadow"}
-        return {"run_id": run.id, "optimized": count, "published": 0, "mode": "shadow"}
+        run.summary = {"optimized": count, "published": 0}
+        return {"run_id": run.id, "optimized": count, "published": 0}
 
 
 @router.post("/overrides", dependencies=[Depends(require_csrf)])
@@ -441,6 +559,24 @@ def list_runs(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_da
         }
         for item in items
     ]
+
+
+@router.get("/runs/{run_id}", dependencies=[Depends(require_session)])
+def get_run(run_id: int, db: Session = Depends(get_database_session)):
+    """Return one operational run for Activity polling."""
+
+    run = db.get(Run, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    return {
+        "id": run.id,
+        "kind": run.kind.value,
+        "status": run.status.value,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+        "summary": run.summary,
+        "error": run.error,
+    }
 
 
 @router.get("/competitors", dependencies=[Depends(require_session)])
@@ -919,26 +1055,43 @@ async def run_hostex_import(db: Session = Depends(get_database_session)):
         await client.close()
 
 
-@router.get("/settings/mode", dependencies=[Depends(require_session)])
-def get_mode(db: Session = Depends(get_database_session)):
-    """Return the current shadow or production mode setting."""
+@router.post("/imports/hostex/booking-site", dependencies=[Depends(require_csrf)])
+async def run_booking_site_import(
+    start: date = Query(default_factory=date.today),
+    end: date | None = None,
+    db: Session = Depends(get_database_session),
+):
+    """Refresh only BookingSite calendars for the dashboard action."""
 
-    item = db.get(Setting, "mode")
-    return item.value if item else {"mode": "shadow", "activation_date": None}
-
-
-@router.put("/settings/mode", dependencies=[Depends(require_csrf)])
-def set_mode(payload: ModeUpdate, db: Session = Depends(get_database_session)):
-    """Persist a validated publishing-mode transition."""
-
-    value = {"mode": payload.mode, "activation_date": payload.activation_date.isoformat() if payload.activation_date else None}
-    item = db.get(Setting, "mode")
-    if item:
-        item.value = value
-    else:
-        db.add(Setting(key="mode", value=value))
-    db.commit()
-    return value
+    settings = get_settings()
+    if not settings.hostex_access_token:
+        raise HTTPException(409, "HOSTEX_ACCESS_TOKEN is not configured")
+    end = end or (start + timedelta(days=365))
+    if end < start or (end - start).days > 365:
+        raise HTTPException(422, "Date range must be between 0 and 365 days")
+    client = HostexClient(settings.hostex_access_token, settings.hostex_base_url)
+    try:
+        with serialized_run(db, RunKind.import_) as run:
+            if run is None:
+                raise HTTPException(409, "Another serialized job is running")
+            try:
+                summary = await import_booking_site_calendars(
+                    db, client, start_date=start, end_date=end
+                )
+                run.summary = summary
+                run.status = RunStatus.succeeded
+                run.finished_at = datetime.now(timezone.utc)
+            except Exception as exc:
+                run.status = RunStatus.failed
+                run.error = str(exc)[:1000]
+                run.finished_at = datetime.now(timezone.utc)
+                db.commit()
+                raise
+            return {"run_id": run.id, "status": "succeeded", "summary": summary}
+    except HostexError as exc:
+        raise HTTPException(502, "BookingSite import failed; see run history") from exc
+    finally:
+        await client.close()
 
 
 @router.get("/settings/pricing", dependencies=[Depends(require_session)])

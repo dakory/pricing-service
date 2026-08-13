@@ -32,7 +32,7 @@ function timestamp(value: string | null) {
 export default async function Runs() {
   const runs = await loadRuns();
   return <Shell>
-    <h1>Run history</h1>
+    <h1>Activity</h1>
     <p className="muted">Imports, competitor collection, optimization, publishing, and reconciliation. Reload this page to refresh running jobs.</p>
     {runs.length ? <div className="card calendar"><table>
       <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Started</th><th>Finished</th><th>Result</th></tr></thead>
