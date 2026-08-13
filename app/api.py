@@ -33,6 +33,7 @@ from app.jobs import (
     generate_price_recommendations,
     pricing_configuration,
     publish_recommendations,
+    pricing_configuration_with_sources,
     serialized_run,
 )
 from app.models import (
@@ -1122,6 +1123,16 @@ def get_pricing_configuration(db: Session = Depends(get_database_session)):
     """Return the effective Pricing Engine v3 configuration."""
 
     return pricing_configuration(db)
+
+
+@router.get("/settings/pricing/effective/{property_id}", dependencies=[Depends(require_session)])
+def get_effective_pricing_configuration(property_id: int, db: Session = Depends(get_database_session)):
+    """Return property settings with the source of every inherited value."""
+
+    property_item = db.get(Property, property_id)
+    if not property_item:
+        raise HTTPException(404, "Property not found")
+    return pricing_configuration_with_sources(db, property_item)
 
 
 @router.put("/settings/pricing", dependencies=[Depends(require_csrf)])

@@ -185,6 +185,29 @@ def pricing_configuration(
     )
 
 
+def pricing_configuration_with_sources(
+    db: Session, prop: Property
+) -> dict[str, dict[str, object]]:
+    """Return effective property settings together with their inheritance source."""
+
+    setting = db.get(Setting, "pricing_engine_v2")
+    global_overrides = setting.value if setting else {}
+    group = prop.pricing_group
+    layers = [
+        ("global", global_overrides),
+        ("pricing_group", group.pricing_settings if group else {}),
+        ("property", prop.pricing_settings or {}),
+    ]
+    effective = DEFAULT_PRICING_CONFIGURATION.copy()
+    sources = {key: "default" for key in effective}
+    for source, overrides in layers:
+        effective = merge_pricing_configuration(effective, overrides)
+        for key, value in (overrides or {}).items():
+            if value is not None:
+                sources[key] = source
+    return {key: {"value": value, "source": sources.get(key, "default")} for key, value in effective.items()}
+
+
 @dataclass(frozen=True)
 class CompetitorMarketObservation:
     """Combine latest availability with the latest successful dated price."""

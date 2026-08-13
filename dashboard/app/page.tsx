@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Shell } from "./components/Shell";
 
 type Property = { id:number; name:string; pricing_group_id:number; booking_site_listing_id:string|null };
@@ -20,6 +20,7 @@ export default function CalendarPage() {
   const [message, setMessage] = useState("");
   const [selectedProperty, setSelectedProperty] = useState<Property|null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const cache = useRef(new Map<string, Day>());
   const [selection, setSelection] = useState<{propertyId:number; start:string; end:string}|null>(null);
   const [editMode, setEditMode] = useState<"override"|"anchor">("override");
   const [editPrice, setEditPrice] = useState("");
@@ -29,7 +30,11 @@ export default function CalendarPage() {
     setLoading(true);
     const response = await fetch(`/api/pricing-calendar?start=${nextRange.start}&end=${nextRange.end}`, { cache:"no-store" });
     if (response.status === 401) { window.location.href = "/login"; return; }
-    if (response.ok) setData(await response.json());
+    if (response.ok) {
+      const next:CalendarResponse = await response.json();
+      next.days.forEach(day => cache.current.set(`${day.property_id}:${day.stay_date}`, day));
+      setData({ ...next, days:Array.from(cache.current.values()).filter(day => day.stay_date >= nextRange.start && day.stay_date <= nextRange.end) });
+    }
     setLoading(false);
   }
   useEffect(() => { void load(); }, []);
