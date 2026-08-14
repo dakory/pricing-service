@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     hostex_base_url: str = "https://api.hostex.io"
     cookie_secure: bool = False
     business_timezone: str = "Asia/Makassar"
-    scraper_adapter: str = "playwright"
     competitor_scrape_lambda_name: str = ""
     competitor_scrape_max_days: int = 30
     competitor_observation_fresh_hours: int = 24

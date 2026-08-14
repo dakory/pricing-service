@@ -59,21 +59,6 @@ services:
         condition: service_healthy
     mem_limit: 96m
 
-  scraper:
-    build:
-      context: .
-      dockerfile: Dockerfile.scraper
-    restart: "no"
-    profiles: ["scrape"]
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+psycopg://pricing:${POSTGRES_PASSWORD}@db/pricing
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    shm_size: 128mb
-    mem_limit: 320m
-
   db:
     image: postgres:17-alpine
     restart: unless-stopped

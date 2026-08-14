@@ -220,21 +220,6 @@ class PricingConfigurationOverride(BaseModel):
         return self
 
 
-class ModeUpdate(BaseModel):
-    """Validate a shadow or production mode transition."""
-
-    mode: Literal["shadow", "production"]
-    activation_date: date | None = None
-
-    @model_validator(mode="after")
-    def production_requires_date(self):
-        """Require an explicit activation date for production mode."""
-
-        if self.mode == "production" and not self.activation_date:
-            raise ValueError("production mode requires activation_date")
-        return self
-
-
 class CompetitorScrapeCreate(BaseModel):
     """Validate a granular manual competitor collection request."""
 

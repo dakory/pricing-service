@@ -147,7 +147,6 @@ const saveProperty=(name)=>{
  fetch('/api/properties/'+item.id,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(payload)}).then(async r=>{if(!r.ok)throw new Error((await r.json()).detail||'Could not save property');setToast('Property settings saved.');setSelected(null);return initialLoad();}).catch(e=>setToast(e.message));
 };
 const [groupData,setGroupData]=React.useState({});
-const defaultGroupUrls=(gname)=>Array.from({length:9},(_,i)=>`https://www.airbnb.com/rooms/${1500000000000+Math.abs(Math.round(Math.sin(gname.length+i*3.1)*99999999999))}`).join('\n');
 const activeGroupName=selected&&selected.startsWith('group:')?selected.slice(6):null;
 const groupFor=(gname)=>groupData[gname]||{name:gname,minComp:'',urls:''};
 const setGroupField=(gname,field,val)=>setGroupData(d=>({...d,[gname]:{...groupFor(gname),[field]:val}}));
@@ -401,7 +400,7 @@ const edgeRight=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.maxDay:i
 const cellBg=isAnchor?'var(--action-accent-soft)':inRange?'var(--action-accent-soft)':isHover?'rgba(11,12,14,0.04)':selected===l.name?'var(--surface-sunken)':'var(--color-white)';
 return (
 <div key={i} onClick={()=>!isLoadingDate&&handleCellClick(l.propIndex,i)} onDoubleClick={()=>{if(record?.assignment)setAssignmentEditor({id:record.assignment.id,propertyId:l.id,date:dateString(d),price:String(record.assignment.price),suggestPrices:record.assignment.suggest_prices,reason:record.assignment.reason||''});}} data-cell-key={cellKey} data-diff={isLoadingDate?0:diff} data-cur={cur} data-breakdown={isLoadingDate?'':breakdown?JSON.stringify(breakdown):''} aria-busy={isLoadingDate} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:isLoadingDate?'var(--surface-sunken)':cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getUTCDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:isLoadingDate?'default':'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
-{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:!hasCurrentPrice?<div aria-label="No data">—</div>:!isAvailable?<div aria-label="Unavailable">—</div>:<><div>{cur.toLocaleString('en-US')}</div>{record?.assignment&&<div title={record.assignment.suggest_prices?'Suggested pricing assignment':'Fixed price assignment'} style={{width:6,height:6,borderRadius:'50%',background:record.assignment.suggest_prices?'var(--color-accent-500)':'var(--text-primary)',display:'inline-block',marginLeft:4}} />}
+{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:!hasCurrentPrice?<div aria-label="No data">—</div>:!isAvailable?<div aria-label="Unavailable">—</div>:<><div>{cur.toLocaleString('en-US')}</div>
 {diff!==0&&<div style={{marginTop:2,fontSize:11,fontWeight:600,color:diff>0?'var(--status-success)':'var(--status-danger)'}}>{rec.toLocaleString('en-US')}</div>}</>}
 </div>);
 })}
