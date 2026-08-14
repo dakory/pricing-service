@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI
 
@@ -26,3 +27,14 @@ def health():
     """Return the lightweight container health response."""
 
     return {"health": "ok"}
+
+
+@app.get("/version")
+def version():
+    """Expose the release identifier used by deployment smoke tests."""
+
+    return {
+        "service": "pricing-api",
+        "version": app.version,
+        "commit": os.getenv("BUILD_SHA", "dev"),
+    }

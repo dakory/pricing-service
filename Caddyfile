@@ -6,6 +6,12 @@
 	handle /health {
 		reverse_proxy api:8000
 	}
+	handle /version {
+		reverse_proxy api:8000
+	}
+	handle /dashboard-version {
+		reverse_proxy dashboard:3000
+	}
 	handle {
 		reverse_proxy dashboard:3000
 	}
@@ -16,4 +22,3 @@
 		Referrer-Policy "same-origin"
 	}
 }
-

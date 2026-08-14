@@ -231,7 +231,7 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 
 resource "aws_ecr_repository" "app" {
   name                 = var.app_name
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
@@ -240,6 +240,24 @@ resource "aws_ecr_repository" "app" {
   tags = {
     Name = var.app_name
   }
+}
+
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep the six newest API and dashboard releases"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 6
+      }
+      action = {
+        type = "expire"
+      }
+    }]
+  })
 }
 
 resource "aws_ecr_repository" "competitor_lambda" {
@@ -378,7 +396,6 @@ resource "aws_instance" "app" {
   user_data = templatefile("${path.module}/user_data.sh.tpl", {
     aws_region     = var.aws_region
     repository_url = aws_ecr_repository.app.repository_url
-    image_tag      = var.image_tag
     app_name       = var.app_name
     domain         = var.domain
     backup_bucket  = aws_s3_bucket.backups.id

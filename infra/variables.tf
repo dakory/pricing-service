@@ -16,12 +16,6 @@ variable "app_name" {
   default     = "pricing-service"
 }
 
-variable "image_tag" {
-  description = "Docker image tag to run"
-  type        = string
-  default     = "latest"
-}
-
 variable "domain" {
   description = "Public dashboard domain"
   type        = string
