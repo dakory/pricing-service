@@ -477,23 +477,24 @@ return (
 </div>
 </div>, document.body)}
 {ReactDOM.createPortal(
-<div style={{position:'fixed',top:0,right:0,height:'100vh',width:300,background:'var(--color-white)',boxShadow:(rangeSelection&&!rangeAnchor)?'var(--shadow-lg)':'none',borderLeft:'1px solid var(--border-default)',transform:`translateX(${rangeSelection&&!rangeAnchor?'0':'100%'})`,transition:'transform var(--duration-standard) var(--ease-standard)',zIndex:202,display:'flex',flexDirection:'column',padding:24,boxSizing:'border-box'}}>
-<div style={{marginBottom:20,display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
+<div style={{position:'fixed',top:0,right:0,height:'100vh',width:460,background:'var(--color-white)',boxShadow:(rangeSelection&&!rangeAnchor)?'var(--shadow-lg)':'none',borderLeft:'1px solid var(--border-default)',transform:`translateX(${rangeSelection&&!rangeAnchor?'0':'100%'})`,transition:'transform var(--duration-standard) var(--ease-standard)',zIndex:202,display:'flex',flexDirection:'column',boxSizing:'border-box'}}>
+<div style={{padding:'24px 28px 20px',borderBottom:'1px solid var(--border-default)',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}}>
 <div>
 {rangeSelection&&<div style={{fontSize:16,fontWeight:600,color:'var(--text-primary)',marginBottom:4}}>{dateLabel(days[rangeSelection.minDay])} – {dateLabel(days[rangeSelection.maxDay])}</div>}
 {rangeSelection&&<div style={{fontSize:14,color:'var(--text-secondary)'}}>{rangeSelection.maxProp-rangeSelection.minProp+1} propert{rangeSelection.maxProp-rangeSelection.minProp+1===1?'y':'ies'} selected</div>}
 </div>
 <IconButton label="Close" onClick={clearRange} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} />
 </div>
+<div style={{flex:1,overflow:'auto',padding:'20px 28px',display:'flex',flexDirection:'column',gap:20}}>
 <Input label="Nightly price" prefix="Rp" numeric min={1} placeholder="e.g. 4,500,000" value={rangePriceInput} onChange={e=>setRangePriceInput(e.target.value)} />
 <Switch label="Suggest pricing" checked={rangeSuggestPrices} onChange={setRangeSuggestPrices} />
 <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:6}}>On keeps urgency, rounding and bounds. Off locks the entered price.</div>
-<Button variant="accent" size="sm" style={{width:'100%',marginTop:16}} onClick={saveRangePrice} disabled={!rangePriceInput||Number(String(rangePriceInput).replace(/[^0-9]/g,''))<=0}>Save assignment</Button>
+ </div><div style={{padding:'16px 28px 24px',borderTop:'1px solid var(--border-default)'}}><Button variant="accent" size="sm" style={{width:'100%'}} onClick={saveRangePrice} disabled={!rangePriceInput||Number(String(rangePriceInput).replace(/[^0-9]/g,''))<=0}>Save assignment</Button></div>
 </div>, document.body)}
 {ReactDOM.createPortal(
 <div style={{position:'fixed',top:0,right:0,height:'100vh',width:360,background:'var(--color-white)',boxShadow:assignmentEditor?'var(--shadow-lg)':'none',borderLeft:'1px solid var(--border-default)',transform:`translateX(${assignmentEditor?'0':'100%'})`,transition:'transform var(--duration-standard) var(--ease-standard)',zIndex:204,display:'flex',flexDirection:'column',padding:24,boxSizing:'border-box'}}>
 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:24}}><div><h3 style={{fontFamily:'var(--font-display)',fontSize:'var(--text-lg)',margin:0}}>Edit price assignment</h3><div style={{fontSize:12,color:'var(--text-secondary)',marginTop:4}}>{assignmentEditor?.date}</div></div><IconButton label="Close" onClick={()=>setAssignmentEditor(null)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} /></div>
-{assignmentEditor&&<div style={{display:'flex',flexDirection:'column',gap:16}}><Input label="Nightly price" prefix="Rp" numeric min={1} value={assignmentEditor.price} onChange={e=>setAssignmentEditor(a=>({...a,price:e.target.value}))} /><div style={{fontSize:12,color:'var(--text-secondary)'}}>Suggest prices</div><Select value={assignmentEditor.suggestPrices?'on':'off'} onChange={e=>setAssignmentEditor(a=>({...a,suggestPrices:e.target.value==='on'}))} options={[{label:'On · apply recommendations',value:'on'},{label:'Off · fixed price',value:'off'}]} /><Input label="Reason" value={assignmentEditor.reason} onChange={e=>setAssignmentEditor(a=>({...a,reason:e.target.value}))} /><Button variant="accent" size="sm" onClick={saveAssignmentEdit}>Save changes</Button><Button variant="secondary" size="sm" onClick={deleteAssignment}>Delete assignment</Button></div>}
+{assignmentEditor&&<div style={{display:'flex',flexDirection:'column',gap:16}}><Input label="Nightly price" prefix="Rp" numeric min={1} value={assignmentEditor.price} onChange={e=>setAssignmentEditor(a=>({...a,price:e.target.value}))} /><Switch label="Suggest pricing" checked={assignmentEditor.suggestPrices} onChange={v=>setAssignmentEditor(a=>({...a,suggestPrices:v}))} /><Input label="Reason" value={assignmentEditor.reason} onChange={e=>setAssignmentEditor(a=>({...a,reason:e.target.value}))} /><Button variant="accent" size="sm" onClick={saveAssignmentEdit}>Save changes</Button><Button variant="secondary" size="sm" onClick={deleteAssignment}>Delete assignment</Button></div>}
 </div>, document.body)}
 {ReactDOM.createPortal(
 <div onClick={()=>setGlobalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(11,12,14,0.28)',backdropFilter:'blur(2px)',opacity:globalOpen?1:0,pointerEvents:globalOpen?'auto':'none',transition:'opacity var(--duration-standard) var(--ease-standard)',zIndex:207}} />, document.body)}
