@@ -67,7 +67,10 @@ export function Select({label,options=[],value,onChange,pill=true}) {
 }
 
 export function Switch({checked,onChange,label,loading=false}) {
-  return <label style={{display:'inline-flex',alignItems:'center',gap:10,fontFamily:'var(--font-sans)',fontSize:14,color:'var(--text-primary)',cursor:loading?'default':'pointer'}}><span onClick={()=>!loading&&onChange&&onChange(!checked)} style={{width:38,height:22,borderRadius:'var(--radius-full)',background:loading?'var(--surface-sunken)':checked?'var(--action-accent)':'var(--border-default)',position:'relative',transition:'background var(--duration-standard) var(--ease-standard)'}}>{loading?<span className="field-value-skeleton switch-value-skeleton"/>:<span style={{position:'absolute',top:2,left:checked?18:2,width:18,height:18,borderRadius:'50%',background:'#fff',transition:'left var(--duration-standard) var(--ease-standard)',boxShadow:'var(--shadow-sm)'}}/>}</span>{label}</label>;
+  return <label style={{display:'inline-flex',alignItems:'center',gap:10,fontFamily:'var(--font-sans)',fontSize:14,color:'var(--text-primary)',cursor:loading?'default':'pointer'}}>
+    <input type="checkbox" checked={Boolean(checked)} disabled={loading} onChange={event=>onChange&&onChange(event.target.checked)} style={{position:'absolute',opacity:0,width:1,height:1,pointerEvents:'none'}} />
+    <span aria-hidden="true" style={{width:38,height:22,borderRadius:'var(--radius-full)',background:loading?'var(--surface-sunken)':checked?'var(--action-accent)':'var(--border-default)',position:'relative',transition:'background var(--duration-standard) var(--ease-standard)'}}>{loading?<span className="field-value-skeleton switch-value-skeleton"/>:<span style={{position:'absolute',top:2,left:checked?18:2,width:18,height:18,borderRadius:'50%',background:'#fff',transition:'left var(--duration-standard) var(--ease-standard)',boxShadow:'var(--shadow-sm)'}}/>}</span>{label}
+  </label>;
 }
 
 export function Toast({tone='neutral',children,onClose}) {
