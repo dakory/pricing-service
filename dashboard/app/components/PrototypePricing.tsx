@@ -208,6 +208,7 @@ const [canLeft,setCanLeft]=React.useState(true);
 const [canRight,setCanRight]=React.useState(true);
 const suppressInitialLeftPrefetch=React.useRef(false);
 const [currentMonth,setCurrentMonth]=React.useState(0);
+const [scrollLeft,setScrollLeft]=React.useState(0);
 const colWidth=96;
 const labelColWidth=280;
 const months=[];
@@ -245,6 +246,7 @@ const loadMoreDates=(direction)=>{
 const updateScrollState=()=>{
 const el=scrollRef.current;if(!el)return;
 updateHoverFromPointer(lastPointer.current.x,lastPointer.current.y);
+setScrollLeft(el.scrollLeft);
 setCanLeft(el.scrollLeft>4);
 setCanRight(el.scrollLeft<el.scrollWidth-el.clientWidth-4);
  const prefetchThreshold=colWidth*3;
@@ -347,12 +349,12 @@ return (
 <div style={{flex:1,position:'relative',minHeight:0,minWidth:0}}>
 {calendarLoading&&<CalendarLoadingSkeleton bodyOnly />}
 <div ref={scrollRef} onScroll={updateScrollState} onMouseMove={e=>{lastPointer.current={x:e.clientX,y:e.clientY};updateHoverFromPointer(e.clientX,e.clientY);}} onMouseLeave={()=>{setHoverCellKey(null);setTooltipData(null);}} style={{height:'100%',overflow:'auto'}}>
-<div style={{display:'grid',gridTemplateColumns:cols,minWidth:'fit-content'}}>
+<div style={{display:'grid',gridTemplateColumns:cols,minWidth:'fit-content',position:'relative'}}>
 <div style={{gridColumn:'1',gridRow:1,position:'sticky',left:0,top:0,zIndex:4,background:'var(--color-white)',padding:'20px 20px 12px',height:48,boxSizing:'border-box',display:'flex',alignItems:'center'}}>
 <h3 style={{fontFamily:'var(--font-display)',fontSize:'var(--text-lg)',fontWeight:600,margin:0}}>{listings.length} Properties</h3>
 </div>
 {months.map((m,idx)=>(
-<div key={m.label} style={{gridColumn:`${m.start+2} / ${idx+1<months.length?months[idx+1].start+2:days.length+2}`,gridRow:1,position:'sticky',left:labelColWidth,top:0,height:48,boxSizing:'border-box',zIndex:2,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,width:'fit-content',maxWidth:'100%',whiteSpace:'nowrap',opacity:idx===currentMonth?1:0,transition:'opacity var(--duration-fast) var(--ease-standard)'}}>{m.label}</div>
+<div key={m.label} style={{position:'absolute',top:0,left:Math.max(labelColWidth+m.start*colWidth,Math.min(scrollLeft+labelColWidth,labelColWidth+(idx+1<months.length?months[idx+1].start:days.length)*colWidth-180)),height:48,width:180,boxSizing:'border-box',zIndex:3,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,whiteSpace:'nowrap',overflow:'hidden'}}>{m.label}</div>
 ))}
 <div style={{gridColumn:'1',gridRow:2,position:'sticky',left:0,top:48,zIndex:4,background:'var(--color-white)',borderBottom:'1px solid var(--border-default)',padding:'0 20px 12px'}}>
 <Input placeholder="Search listings..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} />
@@ -408,8 +410,8 @@ const edgeRight=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.maxDay:i
 const cellBg=isAnchor?'var(--action-accent-soft)':inRange?'var(--action-accent-soft)':isHover?'rgba(11,12,14,0.04)':selected===l.name?'var(--surface-sunken)':'var(--color-white)';
 return (
 <div key={i} onClick={()=>!isLoadingDate&&handleCellClick(l.propIndex,i)} onDoubleClick={()=>{if(record?.assignment)setAssignmentEditor({id:record.assignment.id,propertyId:l.id,date:dateString(d),price:String(record.assignment.price),suggestPrices:record.assignment.suggest_prices,reason:record.assignment.reason||''});}} data-cell-key={cellKey} data-diff={isLoadingDate?0:diff} data-cur={cur} data-breakdown={isLoadingDate?'':breakdown?JSON.stringify(breakdown):''} aria-busy={isLoadingDate} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:isLoadingDate?'var(--surface-sunken)':cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getUTCDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:isLoadingDate?'default':'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
-{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:!hasCurrentPrice&&!record?.recommended_price?<div aria-label="No data">—</div>:!isAvailable?<div aria-label="Unavailable">—</div>:<><div>{hasCurrentPrice?cur.toLocaleString('en-US'):'—'}</div>
-{record?.recommended_price!=null&&<div style={{marginTop:2,fontSize:11,fontWeight:600,color:diff>0?'var(--status-success)':diff<0?'var(--status-danger)':'var(--text-secondary)'}}>{rec.toLocaleString('en-US')}</div>}</>}
+{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:!hasCurrentPrice?<div aria-label="No data">—</div>:!isAvailable?<div aria-label="Unavailable">—</div>:<><div>{cur.toLocaleString('en-US')}</div>
+{record?.recommended_price!=null&&diff!==0&&<div style={{marginTop:2,fontSize:11,fontWeight:600,color:diff>0?'var(--status-success)':'var(--status-danger)'}}>{rec.toLocaleString('en-US')}</div>}</>}
 </div>);
 })}
 </React.Fragment>);
