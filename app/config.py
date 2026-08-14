@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     hostex_access_token: str = ""
     hostex_base_url: str = "https://api.hostex.io"
     cookie_secure: bool = False
+    scheduler_enabled: bool = False
     business_timezone: str = "Asia/Makassar"
     competitor_scrape_lambda_name: str = ""
     competitor_scrape_max_days: int = 30

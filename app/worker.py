@@ -55,6 +55,9 @@ def create_scheduler() -> BlockingScheduler:
 def main():
     """Start the blocking background-job scheduler."""
 
+    settings = get_settings()
+    if not settings.scheduler_enabled:
+        return
     scheduler = create_scheduler()
     scheduler.start()
 
