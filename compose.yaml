@@ -39,6 +39,7 @@ services:
 
   worker:
     build: .
+    image: ${API_IMAGE:-pricing-service:api-latest}
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
     env_file: .env
