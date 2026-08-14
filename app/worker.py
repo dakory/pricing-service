@@ -1,3 +1,5 @@
+import time
+
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -57,7 +59,8 @@ def main():
 
     settings = get_settings()
     if not settings.scheduler_enabled:
-        return
+        while True:
+            time.sleep(3600)
     scheduler = create_scheduler()
     scheduler.start()
 
