@@ -115,6 +115,25 @@ class PriceAnchorCreate(BaseModel):
         return self
 
 
+class PriceAssignmentCreate(BaseModel):
+    """Validate one range of manual prices and its suggestion mode."""
+
+    property_id: int
+    start_date: date
+    end_date: date
+    price: Decimal = Field(gt=0)
+    suggest_prices: bool = True
+    reason: str = Field(default="Calendar price assignment", min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def valid_range(self):
+        """Require an ordered date range."""
+
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must not precede start_date")
+        return self
+
+
 class UrgencyRule(BaseModel):
     """Define one inclusive lead-time discount range."""
 

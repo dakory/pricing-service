@@ -48,6 +48,7 @@ from app.models import (
     HostexListing,
     Override,
     PriceAnchor,
+    PriceAssignment,
     PricingGroup,
     Property,
     Recommendation,
@@ -63,6 +64,7 @@ from app.schemas import (
     CompetitorScrapeCreate,
     OverrideCreate,
     PriceAnchorCreate,
+    PriceAssignmentCreate,
     PricingConfiguration,
     PricingConfigurationOverride,
     PricingGroupCreate,
@@ -332,9 +334,16 @@ def pricing_calendar(
             PriceAnchor.stay_date.between(start, end),
         )
     ).all()
+    assignments = db.scalars(
+        select(PriceAssignment).where(
+            PriceAssignment.property_id.in_(property_ids),
+            PriceAssignment.stay_date.between(start, end),
+        )
+    ).all()
     calendar_by_key = {(row.property_id, row.stay_date): row for row in calendars}
     recommendation_by_key = {(row.property_id, row.stay_date): row for row in recommendations}
     anchor_by_key = {(row.property_id, row.stay_date): row for row in anchors}
+    assignment_by_key = {(row.property_id, row.stay_date): row for row in assignments}
     overrides_by_property = {}
     for override in overrides:
         overrides_by_property.setdefault(override.property_id, []).append(override)
@@ -352,6 +361,7 @@ def pricing_calendar(
                 None,
             )
             anchor = anchor_by_key.get(key)
+            assignment = assignment_by_key.get(key)
             current_price = calendar.price if calendar else None
             available = bool(calendar and (calendar.inventory is None or calendar.inventory > 0))
             recommended_price = recommendation.recommended_price if recommendation else None
@@ -391,6 +401,14 @@ def pricing_calendar(
                     "source_type": anchor.source_type,
                     "source_price": anchor.source_price,
                     "suggest_prices": anchor.suggest_prices,
+                },
+                "assignment": None if assignment is None else {
+                    "id": assignment.id,
+                    "price": assignment.price,
+                    "suggest_prices": assignment.suggest_prices,
+                    "reason": assignment.reason,
+                    "created_at": assignment.created_at,
+                    "updated_at": assignment.updated_at,
                 },
                 "warnings": recommendation.explanation.get("warnings", []) if recommendation else [],
                 "explanation": recommendation.explanation if recommendation else {},
@@ -464,8 +482,114 @@ def create_override(payload: OverrideCreate, db: Session = Depends(get_database_
     available = [row.stay_date for row in available_days if row.inventory is None or row.inventory > 0]
     for stay_date in available:
         db.add(Override(**values, start_date=stay_date, end_date=stay_date, suggest_prices=False))
+        existing = db.scalar(select(PriceAssignment).where(PriceAssignment.property_id == payload.property_id, PriceAssignment.stay_date == stay_date))
+        if existing:
+            existing.price = payload.price
+            existing.suggest_prices = False
+            existing.reason = payload.reason
+            existing.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(PriceAssignment(property_id=payload.property_id, stay_date=stay_date, price=payload.price, suggest_prices=False, reason=payload.reason, created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc)))
     db.commit()
     return {"count": len(available), "skipped_unavailable": (payload.end_date - payload.start_date).days + 1 - len(available)}
+
+
+@router.post("/price-assignments", dependencies=[Depends(require_csrf)])
+def create_price_assignment(
+    payload: PriceAssignmentCreate, db: Session = Depends(get_database_session)
+):
+    """Create or replace one unified assignment for every available date in a range."""
+
+    if not db.get(Property, payload.property_id):
+        raise HTTPException(404, "Property not found")
+    now = datetime.now(timezone.utc)
+    cursor = payload.start_date
+    count = 0
+    skipped = 0
+    while cursor <= payload.end_date:
+        calendar = db.scalar(select(HostexCalendarDay).where(
+            HostexCalendarDay.property_id == payload.property_id,
+            HostexCalendarDay.channel_type == "booking_site",
+            HostexCalendarDay.stay_date == cursor,
+        ))
+        if calendar is None or (calendar.inventory is not None and calendar.inventory <= 0):
+            skipped += 1
+            cursor += timedelta(days=1)
+            continue
+        item = db.scalar(select(PriceAssignment).where(
+            PriceAssignment.property_id == payload.property_id,
+            PriceAssignment.stay_date == cursor,
+        ))
+        if item:
+            item.price = payload.price
+            item.suggest_prices = payload.suggest_prices
+            item.reason = payload.reason
+            item.updated_at = now
+        else:
+            db.add(PriceAssignment(
+                property_id=payload.property_id,
+                stay_date=cursor,
+                price=payload.price,
+                suggest_prices=payload.suggest_prices,
+                reason=payload.reason,
+                created_at=now,
+                updated_at=now,
+            ))
+        # Keep legacy tables from shadowing the unified assignment during rollout.
+        for legacy_override in db.scalars(select(Override).where(Override.property_id == payload.property_id, Override.start_date <= cursor, Override.end_date >= cursor)).all():
+            db.delete(legacy_override)
+        for legacy_anchor in db.scalars(select(PriceAnchor).where(PriceAnchor.property_id == payload.property_id, PriceAnchor.stay_date == cursor)).all():
+            db.delete(legacy_anchor)
+        count += 1
+        cursor += timedelta(days=1)
+    db.commit()
+    return {"count": count, "skipped_unavailable": skipped}
+
+
+@router.get("/price-assignments", dependencies=[Depends(require_session)])
+def list_price_assignments(property_id: int | None = None, db: Session = Depends(get_database_session)):
+    """List unified date-level assignments."""
+
+    query = select(PriceAssignment).order_by(PriceAssignment.stay_date)
+    if property_id:
+        query = query.where(PriceAssignment.property_id == property_id)
+    return [{
+        "id": item.id, "property_id": item.property_id, "stay_date": item.stay_date,
+        "price": item.price, "suggest_prices": item.suggest_prices, "reason": item.reason,
+        "created_at": item.created_at, "updated_at": item.updated_at,
+    } for item in db.scalars(query)]
+
+
+@router.patch("/price-assignments/{assignment_id}", dependencies=[Depends(require_csrf)])
+def update_price_assignment(assignment_id: int, payload: PriceAssignmentCreate, db: Session = Depends(get_database_session)):
+    """Update a single date-level assignment."""
+
+    item = db.get(PriceAssignment, assignment_id)
+    if not item or item.property_id != payload.property_id or payload.start_date != payload.end_date:
+        raise HTTPException(404, "Price assignment not found")
+    item.stay_date = payload.start_date
+    item.price = payload.price
+    item.suggest_prices = payload.suggest_prices
+    item.reason = payload.reason
+    item.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"id": item.id, "updated": True}
+
+
+@router.delete("/price-assignments/{assignment_id}", dependencies=[Depends(require_csrf)])
+def delete_price_assignment(assignment_id: int, db: Session = Depends(get_database_session)):
+    """Remove one date-level assignment and restore normal pricing behavior."""
+
+    item = db.get(PriceAssignment, assignment_id)
+    if not item:
+        raise HTTPException(404, "Price assignment not found")
+    for legacy_override in db.scalars(select(Override).where(Override.property_id == item.property_id, Override.start_date <= item.stay_date, Override.end_date >= item.stay_date)).all():
+        db.delete(legacy_override)
+    for legacy_anchor in db.scalars(select(PriceAnchor).where(PriceAnchor.property_id == item.property_id, PriceAnchor.stay_date == item.stay_date)).all():
+        db.delete(legacy_anchor)
+    db.delete(item)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/overrides", dependencies=[Depends(require_session)])
@@ -497,6 +621,9 @@ def delete_override(override_id: int, db: Session = Depends(get_database_session
     item = db.get(Override, override_id)
     if not item:
         raise HTTPException(404, "Override not found")
+    assignment = db.scalar(select(PriceAssignment).where(PriceAssignment.property_id == item.property_id, PriceAssignment.stay_date == item.start_date))
+    if assignment and not assignment.suggest_prices:
+        db.delete(assignment)
     db.delete(item)
     db.commit()
     return Response(status_code=204)
@@ -552,6 +679,14 @@ def create_manual_price_anchor(
                     updated_at=now,
                 )
             )
+        assignment = db.scalar(select(PriceAssignment).where(PriceAssignment.property_id == payload.property_id, PriceAssignment.stay_date == cursor))
+        if assignment:
+            assignment.price = payload.price
+            assignment.suggest_prices = True
+            assignment.reason = payload.reason
+            assignment.updated_at = now
+        else:
+            db.add(PriceAssignment(property_id=payload.property_id, stay_date=cursor, price=payload.price, suggest_prices=True, reason=payload.reason, created_at=now, updated_at=now))
         count += 1
         cursor += timedelta(days=1)
     db.commit()
@@ -591,6 +726,9 @@ def delete_price_anchor(anchor_id: int, db: Session = Depends(get_database_sessi
     item = db.get(PriceAnchor, anchor_id)
     if not item:
         raise HTTPException(404, "Price anchor not found")
+    assignment = db.scalar(select(PriceAssignment).where(PriceAssignment.property_id == item.property_id, PriceAssignment.stay_date == item.stay_date))
+    if assignment and assignment.suggest_prices:
+        db.delete(assignment)
     db.delete(item)
     db.commit()
     return Response(status_code=204)

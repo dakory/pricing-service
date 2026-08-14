@@ -390,6 +390,24 @@ class PriceAnchor(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class PriceAssignment(Base):
+    """Store one manual date-level price assignment and its application mode."""
+
+    __tablename__ = "price_assignments"
+    __table_args__ = (
+        UniqueConstraint("property_id", "stay_date", name="uq_price_assignment_property_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id"))
+    stay_date: Mapped[date] = mapped_column(Date)
+    price: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    suggest_prices: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class AdminSession(Base):
     """Store a hashed single-administrator browser session."""
 

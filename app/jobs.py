@@ -14,7 +14,7 @@ from app.competitor_scrapes import start_collection_run
 from app.database import SessionLocal
 from app.hostex import HostexClient
 from app.hostex_import import import_hostex
-from app.models import CompetitorDateError, CompetitorListing, CompetitorObservation, CompetitorPriceTarget, CompetitorScrapeBatch, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PriceAnchor, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
+from app.models import CompetitorDateError, CompetitorListing, CompetitorObservation, CompetitorPriceTarget, CompetitorScrapeBatch, CompetitorStayQuote, HostexCalendarDay, HostexListing, Override, PriceAnchor, PriceAssignment, PricingGroup, Property, Recommendation, Reservation, Run, RunKind, RunStatus, Setting
 from app.pricing import DEFAULT_PRICING_CONFIGURATION, calculate_price, merge_pricing_configuration
 
 # PostgreSQL advisory-lock key shared by imports and pricing to serialize heavy jobs.
@@ -345,6 +345,16 @@ def generate_price_recommendations(
                 )
             ).all()
         }
+        assignments = {
+            item.stay_date: item
+            for item in db.scalars(
+                select(PriceAssignment).where(
+                    PriceAssignment.property_id == prop.id,
+                    PriceAssignment.stay_date >= today,
+                    PriceAssignment.stay_date < horizon_end,
+                )
+            ).all()
+        }
         minimum_competitor_count = int(
             configuration["minimum_competitor_count"]
         )
@@ -363,7 +373,16 @@ def generate_price_recommendations(
             ]
             override = overrides.get((prop.id, stay_date))
             current = calendar.get(stay_date)
+            assignment = assignments.get(stay_date)
             anchor = saved_anchors.get(stay_date)
+            if assignment and assignment.suggest_prices:
+                anchor = type("ManualAssignment", (), {
+                    "source_type": "manual_base",
+                    "source_price": assignment.price,
+                    "source_metadata": {"reason": assignment.reason},
+                })()
+            elif assignment and not assignment.suggest_prices:
+                override = assignment
             if (
                 configuration["base_price_mode"] == "market_median"
                 and override is None

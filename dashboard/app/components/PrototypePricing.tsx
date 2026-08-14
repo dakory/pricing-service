@@ -118,7 +118,8 @@ const saveGlobal=()=>{if(!globalSettings)return;const min=Number(String(globalSe
 const [tooltipData,setTooltipData]=React.useState(null);
 const [priceOverrides,setPriceOverrides]=React.useState({});
 const [rangePriceInput,setRangePriceInput]=React.useState('');
-const [rangeActionMode,setRangeActionMode]=React.useState('override');
+const [rangeActionMode,setRangeActionMode]=React.useState('suggest');
+const [assignmentEditor,setAssignmentEditor]=React.useState(null);
 const [propertyData,setPropertyData]=React.useState({});
 const [groupPickerOpen,setGroupPickerOpen]=React.useState(false);
 const [groupOverrides,setGroupOverrides]=React.useState({});
@@ -301,6 +302,8 @@ setRangeAnchor(null);
 }
 };
 const clearRange=()=>{setRangeAnchor(null);setRangeSelection(null);setRangePriceInput('');};
+const saveAssignmentEdit=async()=>{if(!assignmentEditor)return;const price=Number(String(assignmentEditor.price).replace(/[^0-9]/g,''));if(!price||price<=0){setToast('Enter a price greater than zero.');return;}const response=await fetch(`/api/price-assignments/${assignmentEditor.id}`,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({property_id:assignmentEditor.propertyId,start_date:assignmentEditor.date,end_date:assignmentEditor.date,price,suggest_prices:assignmentEditor.suggestPrices,reason:assignmentEditor.reason||'Calendar price assignment'})});const body=await response.json().catch(()=>({}));if(!response.ok){setToast(body.detail||'Could not update assignment.');return;}setAssignmentEditor(null);setToast('Assignment updated.');initialLoad();};
+const deleteAssignment=async()=>{if(!assignmentEditor)return;const response=await fetch(`/api/price-assignments/${assignmentEditor.id}`,{method:'DELETE',headers:{'X-CSRF-Token':csrfToken()}});if(!response.ok){setToast('Could not delete assignment.');return;}setAssignmentEditor(null);setToast('Assignment removed.');initialLoad();};
 const saveRangePrice=()=>{
 const val=Number(String(rangePriceInput).replace(/[^0-9]/g,''));
 if(!val||!rangeSelection)return;
@@ -311,10 +314,9 @@ selectedListings.push(l);
 });
 const nDates=(rangeSelection.maxDay-rangeSelection.minDay+1)*(rangeSelection.maxProp-rangeSelection.minProp+1);
 const start=days[rangeSelection.minDay].toISOString().slice(0,10); const end=days[rangeSelection.maxDay].toISOString().slice(0,10);
-const path=rangeActionMode==='anchor'?'/api/price-anchors':'/api/overrides';
 const availableDates=selectedListings.flatMap(l=>days.slice(rangeSelection.minDay,rangeSelection.maxDay+1).filter(d=>{const record=calendarRecords[`${l.id}:${dateString(d)}`];return record?.available!==false;}).map(d=>({property_id:l.id,date:dateString(d)})));
 if(!availableDates.length){setToast('No available dates in the selected range.');return;}
-Promise.all(selectedListings.map(l=>fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify(rangeActionMode==='anchor'?{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar manual base anchor'}:{property_id:l.id,start_date:start,end_date:end,price:val,reason:'Calendar price override'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeActionMode==='anchor'?'Anchor':'Price'} saved for ${availableDates.length} available date${availableDates.length===1?'':'s'}.`);clearRange();return initialLoad();}).catch(e=>setToast(e.message));
+Promise.all(selectedListings.map(l=>fetch('/api/price-assignments',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({property_id:l.id,start_date:start,end_date:end,price:val,suggest_prices:rangeActionMode==='suggest',reason:rangeActionMode==='suggest'?'Calendar manual base price':'Calendar fixed price'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeActionMode==='suggest'?'Suggested':'Fixed'} price saved for ${availableDates.length} available date${availableDates.length===1?'':'s'}.`);clearRange();return initialLoad();}).catch(e=>setToast(e.message));
 };
 const dateLabel=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});
 const loadingDateSet=new Set(loadingDates);
@@ -398,8 +400,8 @@ const edgeLeft=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.minDay:i)
 const edgeRight=(isAnchor||inRange)&&i===(rangeSelection?rangeSelection.maxDay:i);
 const cellBg=isAnchor?'var(--action-accent-soft)':inRange?'var(--action-accent-soft)':isHover?'rgba(11,12,14,0.04)':selected===l.name?'var(--surface-sunken)':'var(--color-white)';
 return (
-<div key={i} onClick={()=>!isLoadingDate&&handleCellClick(l.propIndex,i)} data-cell-key={cellKey} data-diff={isLoadingDate?0:diff} data-cur={cur} data-breakdown={isLoadingDate?'':breakdown?JSON.stringify(breakdown):''} aria-busy={isLoadingDate} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:isLoadingDate?'var(--surface-sunken)':cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getUTCDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:isLoadingDate?'default':'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
-{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:!hasCurrentPrice?<div aria-label="No data">—</div>:!isAvailable?<div aria-label="Unavailable">—</div>:<><div>{cur.toLocaleString('en-US')}</div>
+<div key={i} onClick={()=>!isLoadingDate&&handleCellClick(l.propIndex,i)} onDoubleClick={()=>{if(record?.assignment)setAssignmentEditor({id:record.assignment.id,propertyId:l.id,date:dateString(d),price:String(record.assignment.price),suggestPrices:record.assignment.suggest_prices,reason:record.assignment.reason||''});}} data-cell-key={cellKey} data-diff={isLoadingDate?0:diff} data-cur={cur} data-breakdown={isLoadingDate?'':breakdown?JSON.stringify(breakdown):''} aria-busy={isLoadingDate} style={{gridColumn:i+2,gridRow:l.row,position:'relative',padding:'14px 8px',textAlign:'right',fontFamily:'var(--font-sans)',fontVariantNumeric:'tabular-nums',fontSize:12.5,color:'var(--text-primary)',background:isLoadingDate?'var(--surface-sunken)':cellBg,borderTop:edgeTop?'1.5px solid var(--color-accent-500)':'none',borderBottom:edgeBottom?'1.5px solid var(--color-accent-500)':'1px solid var(--border-default)',borderLeft:edgeLeft?'1.5px solid var(--color-accent-500)':(d.getUTCDate()===1?'1px solid var(--border-default)':'none'),borderRight:edgeRight?'1.5px solid var(--color-accent-500)':'none',cursor:isLoadingDate?'default':'pointer',transition:'background var(--duration-fast) var(--ease-standard)'}}>
+{isLoadingDate?<div className="calendar-skeleton calendar-skeleton-price" aria-label="Loading price" />:!hasCurrentPrice?<div aria-label="No data">—</div>:!isAvailable?<div aria-label="Unavailable">—</div>:<><div>{cur.toLocaleString('en-US')}</div>{record?.assignment&&<div title={record.assignment.suggest_prices?'Suggested pricing assignment':'Fixed price assignment'} style={{width:6,height:6,borderRadius:'50%',background:record.assignment.suggest_prices?'var(--color-accent-500)':'var(--text-primary)',display:'inline-block',marginLeft:4}} />}
 {diff!==0&&<div style={{marginTop:2,fontSize:11,fontWeight:600,color:diff>0?'var(--status-success)':'var(--status-danger)'}}>{rec.toLocaleString('en-US')}</div>}</>}
 </div>);
 })}
@@ -484,8 +486,15 @@ return (
 <IconButton label="Close" onClick={clearRange} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} />
 </div>
 <Input label="Nightly price" prefix="Rp" numeric min={1} placeholder="e.g. 4,500,000" value={rangePriceInput} onChange={e=>setRangePriceInput(e.target.value)} />
-<Select value={rangeActionMode} onChange={e=>setRangeActionMode(e.target.value)} options={[{label:'Price override',value:'override'},{label:'Manual base anchor',value:'anchor'}]} />
-<Button variant="accent" size="sm" style={{width:'100%',marginTop:16}} onClick={saveRangePrice}>Save</Button>
+<div style={{fontSize:12,color:'var(--text-secondary)',marginTop:12}}>Suggest prices</div>
+<Select value={rangeActionMode} onChange={e=>setRangeActionMode(e.target.value)} options={[{label:'On · apply recommendations',value:'suggest'},{label:'Off · fixed price',value:'fixed'}]} />
+<div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:6}}>On keeps urgency, rounding and bounds. Off locks the entered price.</div>
+<Button variant="accent" size="sm" style={{width:'100%',marginTop:16}} onClick={saveRangePrice} disabled={!rangePriceInput||Number(String(rangePriceInput).replace(/[^0-9]/g,''))<=0}>Save assignment</Button>
+</div>, document.body)}
+{ReactDOM.createPortal(
+<div style={{position:'fixed',top:0,right:0,height:'100vh',width:360,background:'var(--color-white)',boxShadow:assignmentEditor?'var(--shadow-lg)':'none',borderLeft:'1px solid var(--border-default)',transform:`translateX(${assignmentEditor?'0':'100%'})`,transition:'transform var(--duration-standard) var(--ease-standard)',zIndex:204,display:'flex',flexDirection:'column',padding:24,boxSizing:'border-box'}}>
+<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:24}}><div><h3 style={{fontFamily:'var(--font-display)',fontSize:'var(--text-lg)',margin:0}}>Edit price assignment</h3><div style={{fontSize:12,color:'var(--text-secondary)',marginTop:4}}>{assignmentEditor?.date}</div></div><IconButton label="Close" onClick={()=>setAssignmentEditor(null)} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} /></div>
+{assignmentEditor&&<div style={{display:'flex',flexDirection:'column',gap:16}}><Input label="Nightly price" prefix="Rp" numeric min={1} value={assignmentEditor.price} onChange={e=>setAssignmentEditor(a=>({...a,price:e.target.value}))} /><div style={{fontSize:12,color:'var(--text-secondary)'}}>Suggest prices</div><Select value={assignmentEditor.suggestPrices?'on':'off'} onChange={e=>setAssignmentEditor(a=>({...a,suggestPrices:e.target.value==='on'}))} options={[{label:'On · apply recommendations',value:'on'},{label:'Off · fixed price',value:'off'}]} /><Input label="Reason" value={assignmentEditor.reason} onChange={e=>setAssignmentEditor(a=>({...a,reason:e.target.value}))} /><Button variant="accent" size="sm" onClick={saveAssignmentEdit}>Save changes</Button><Button variant="secondary" size="sm" onClick={deleteAssignment}>Delete assignment</Button></div>}
 </div>, document.body)}
 {ReactDOM.createPortal(
 <div onClick={()=>setGlobalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(11,12,14,0.28)',backdropFilter:'blur(2px)',opacity:globalOpen?1:0,pointerEvents:globalOpen?'auto':'none',transition:'opacity var(--duration-standard) var(--ease-standard)',zIndex:207}} />, document.body)}
