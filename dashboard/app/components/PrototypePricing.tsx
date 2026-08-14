@@ -118,7 +118,7 @@ const saveGlobal=()=>{if(!globalSettings)return;const min=Number(String(globalSe
 const [tooltipData,setTooltipData]=React.useState(null);
 const [priceOverrides,setPriceOverrides]=React.useState({});
 const [rangePriceInput,setRangePriceInput]=React.useState('');
-const [rangeActionMode,setRangeActionMode]=React.useState('suggest');
+const [rangeSuggestPrices,setRangeSuggestPrices]=React.useState(true);
 const [assignmentEditor,setAssignmentEditor]=React.useState(null);
 const [propertyData,setPropertyData]=React.useState({});
 const [groupPickerOpen,setGroupPickerOpen]=React.useState(false);
@@ -316,7 +316,7 @@ const nDates=(rangeSelection.maxDay-rangeSelection.minDay+1)*(rangeSelection.max
 const start=days[rangeSelection.minDay].toISOString().slice(0,10); const end=days[rangeSelection.maxDay].toISOString().slice(0,10);
 const availableDates=selectedListings.flatMap(l=>days.slice(rangeSelection.minDay,rangeSelection.maxDay+1).filter(d=>{const record=calendarRecords[`${l.id}:${dateString(d)}`];return record?.available!==false;}).map(d=>({property_id:l.id,date:dateString(d)})));
 if(!availableDates.length){setToast('No available dates in the selected range.');return;}
-Promise.all(selectedListings.map(l=>fetch('/api/price-assignments',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({property_id:l.id,start_date:start,end_date:end,price:val,suggest_prices:rangeActionMode==='suggest',reason:rangeActionMode==='suggest'?'Calendar manual base price':'Calendar fixed price'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeActionMode==='suggest'?'Suggested':'Fixed'} price saved for ${availableDates.length} available date${availableDates.length===1?'':'s'}.`);clearRange();return initialLoad();}).catch(e=>setToast(e.message));
+Promise.all(selectedListings.map(l=>fetch('/api/price-assignments',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrfToken()},body:JSON.stringify({property_id:l.id,start_date:start,end_date:end,price:val,suggest_prices:rangeSuggestPrices,reason:rangeSuggestPrices?'Calendar manual base price':'Calendar fixed price'})}))).then(async responses=>{const failed=responses.find(r=>!r.ok);if(failed)throw new Error((await failed.json()).detail||'Could not save calendar change');setToast(`${rangeSuggestPrices?'Suggested':'Fixed'} price saved for ${availableDates.length} available date${availableDates.length===1?'':'s'}.`);clearRange();return initialLoad();}).catch(e=>setToast(e.message));
 };
 const dateLabel=d=>d.toLocaleDateString('en-US',{month:'short',day:'numeric',timeZone:'UTC'});
 const loadingDateSet=new Set(loadingDates);
@@ -486,8 +486,7 @@ return (
 <IconButton label="Close" onClick={clearRange} icon={<img src="https://unpkg.com/lucide-static@latest/icons/x.svg" style={{width:16,height:16}} />} />
 </div>
 <Input label="Nightly price" prefix="Rp" numeric min={1} placeholder="e.g. 4,500,000" value={rangePriceInput} onChange={e=>setRangePriceInput(e.target.value)} />
-<div style={{fontSize:12,color:'var(--text-secondary)',marginTop:12}}>Suggest prices</div>
-<Select value={rangeActionMode} onChange={e=>setRangeActionMode(e.target.value)} options={[{label:'On · apply recommendations',value:'suggest'},{label:'Off · fixed price',value:'fixed'}]} />
+<Switch label="Suggest pricing" checked={rangeSuggestPrices} onChange={setRangeSuggestPrices} />
 <div style={{fontSize:11.5,color:'var(--text-muted)',marginTop:6}}>On keeps urgency, rounding and bounds. Off locks the entered price.</div>
 <Button variant="accent" size="sm" style={{width:'100%',marginTop:16}} onClick={saveRangePrice} disabled={!rangePriceInput||Number(String(rangePriceInput).replace(/[^0-9]/g,''))<=0}>Save assignment</Button>
 </div>, document.body)}
