@@ -208,8 +208,6 @@ const [canLeft,setCanLeft]=React.useState(true);
 const [canRight,setCanRight]=React.useState(true);
 const suppressInitialLeftPrefetch=React.useRef(false);
 const [currentMonth,setCurrentMonth]=React.useState(0);
-const [scrollLeft,setScrollLeft]=React.useState(0);
-const scrollFrameRef=React.useRef(null);
 const colWidth=96;
 const labelColWidth=280;
 const months=[];
@@ -247,7 +245,6 @@ const loadMoreDates=(direction)=>{
 const updateScrollState=()=>{
 const el=scrollRef.current;if(!el)return;
 updateHoverFromPointer(lastPointer.current.x,lastPointer.current.y);
-if(scrollFrameRef.current===null){scrollFrameRef.current=requestAnimationFrame(()=>{scrollFrameRef.current=null;setScrollLeft(scrollRef.current?.scrollLeft||0);});}
 setCanLeft(el.scrollLeft>4);
 setCanRight(el.scrollLeft<el.scrollWidth-el.clientWidth-4);
  const prefetchThreshold=colWidth*3;
@@ -355,7 +352,9 @@ return (
 <h3 style={{fontFamily:'var(--font-display)',fontSize:'var(--text-lg)',fontWeight:600,margin:0}}>{listings.length} Properties</h3>
 </div>
 {months.map((m,idx)=>(
-<div key={m.label} style={{position:'absolute',top:0,left:Math.max(labelColWidth+m.start*colWidth,Math.min(scrollLeft+labelColWidth,labelColWidth+(idx+1<months.length?months[idx+1].start:days.length)*colWidth-180)),height:48,width:180,boxSizing:'border-box',zIndex:3,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,whiteSpace:'nowrap',overflow:'hidden'}}>{m.label}</div>
+<div key={m.label} style={{gridColumn:`${m.start+2} / ${idx+1<months.length?months[idx+1].start+2:days.length+2}`,gridRow:1,height:48,position:'relative',zIndex:3,background:'var(--color-white)'}}>
+<div data-month-label={m.label} style={{position:'sticky',left:labelColWidth,top:0,width:180,height:48,boxSizing:'border-box',zIndex:3,background:'var(--color-white)',padding:'14px 16px',fontFamily:'var(--font-display)',fontWeight:600,fontSize:15,whiteSpace:'nowrap'}}>{m.label}</div>
+</div>
 ))}
 <div style={{gridColumn:'1',gridRow:2,position:'sticky',left:0,top:48,zIndex:4,background:'var(--color-white)',borderBottom:'1px solid var(--border-default)',padding:'0 20px 12px'}}>
 <Input placeholder="Search listings..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} />

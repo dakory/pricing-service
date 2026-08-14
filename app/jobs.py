@@ -547,14 +547,14 @@ async def publish_recommendations(db: Session) -> int:
 
 
 def daily_pricing_run():
-    """Run the scheduled pricing calculation and gated publication workflow."""
+    """Run the scheduled pricing calculation without changing Hostex prices."""
 
     with SessionLocal() as db, serialized_run(db, RunKind.optimize) as run:
         if run is None:
             return
         optimized = generate_price_recommendations(db)
-        published = asyncio.run(publish_recommendations(db))
-        run.summary = {"optimized": optimized, "published": published}
+        # Publishing is intentionally a separate, explicit dashboard action.
+        run.summary = {"optimized": optimized, "published": 0}
 
 
 def daily_hostex_import():
