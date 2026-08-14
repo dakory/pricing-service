@@ -176,8 +176,17 @@ def update_pricing_group(
         raise HTTPException(404, "Pricing group not found")
     values = payload.model_dump(exclude_unset=True)
     if "pricing_settings" in values:
+        raw_settings = values["pricing_settings"] or {}
+        # An explicit null setting removes an override and restores inheritance
+        # from the parent configuration level.
+        existing_settings = dict(item.pricing_settings or {})
+        for key, value in raw_settings.items():
+            if value is None:
+                existing_settings.pop(key, None)
+            else:
+                existing_settings[key] = value
         overrides = PricingConfigurationOverride.model_validate(
-            values["pricing_settings"] or {}
+            existing_settings
         ).model_dump(exclude_none=True, mode="json")
         PricingConfiguration.model_validate(
             merge_pricing_configuration(pricing_configuration(db), overrides)
@@ -232,8 +241,15 @@ def update_property(property_id: int, payload: PropertyUpdate, db: Session = Dep
     ):
         raise HTTPException(404, "Pricing group not found")
     if "pricing_settings" in values:
+        raw_settings = values["pricing_settings"] or {}
+        existing_settings = dict(item.pricing_settings or {})
+        for key, value in raw_settings.items():
+            if value is None:
+                existing_settings.pop(key, None)
+            else:
+                existing_settings[key] = value
         overrides = PricingConfigurationOverride.model_validate(
-            values["pricing_settings"] or {}
+            existing_settings
         ).model_dump(exclude_none=True, mode="json")
         PricingConfiguration.model_validate(
             merge_pricing_configuration(pricing_configuration(db), overrides)
