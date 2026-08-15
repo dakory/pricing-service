@@ -182,6 +182,40 @@ def ensure_no_overlapping_run(
             )
 
 
+def ensure_no_overlapping_group_run(
+    db: Session,
+    pricing_group_id: int,
+    start_date: date,
+    end_date: date,
+    listing_ids: set[int] | None = None,
+) -> None:
+    """Reject an active scrape overlapping a pricing group's date range."""
+
+    active_runs = db.scalars(
+        select(Run).where(Run.kind == RunKind.scrape, Run.status == RunStatus.running)
+    )
+    for run in active_runs:
+        summary = run.summary or {}
+        summary_listing_ids = {
+            int(item)
+            for item in summary.get("competitor_listing_ids", [])
+            if item is not None
+        }
+        if summary.get("competitor_listing_id") is not None:
+            summary_listing_ids.add(int(summary["competitor_listing_id"]))
+        if summary.get("pricing_group_id") != pricing_group_id and not (
+            listing_ids and summary_listing_ids.intersection(listing_ids)
+        ):
+            continue
+        active_start = date.fromisoformat(summary["start_date"])
+        active_end = date.fromisoformat(summary["end_date"])
+        if start_date <= active_end and end_date >= active_start:
+            raise HTTPException(
+                status_code=409,
+                detail="An overlapping competitor scrape is already running for this pricing group",
+            )
+
+
 def invoke_lambda(event: dict) -> None:
     """Invoke the configured collector Lambda asynchronously."""
 
@@ -288,6 +322,96 @@ def start_collection_run(
     return run
 
 
+def start_group_collection_run(
+    db: Session,
+    pricing_group_id: int,
+    listings: list[CompetitorListing],
+    start_date: date,
+    end_date: date,
+    *,
+    force_refresh: bool = False,
+    collection_mode: str | None = None,
+) -> Run:
+    """Create one run covering every competitor listing in a pricing group."""
+
+    ensure_no_overlapping_group_run(
+        db,
+        pricing_group_id,
+        start_date,
+        end_date,
+        {item.id for item in listings},
+    )
+    requested_by_listing: dict[str, list[str]] = {}
+    skipped_by_listing: dict[str, list[str]] = {}
+    listing_ids = [item.id for item in listings]
+    for listing in listings:
+        dates, skipped = pending_dates(
+            db, listing.id, start_date, end_date, force_refresh, collection_mode
+        )
+        requested_by_listing[str(listing.id)] = [item.isoformat() for item in dates]
+        skipped_by_listing[str(listing.id)] = [item.isoformat() for item in skipped]
+    all_requested = sorted({item for rows in requested_by_listing.values() for item in rows})
+    summary = {
+        "phase": "calendar_queued",
+        "pricing_group_id": pricing_group_id,
+        "competitor_listing_ids": listing_ids,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "requested_dates": all_requested,
+        "requested_dates_by_listing": requested_by_listing,
+        "skipped_dates_by_listing": skipped_by_listing,
+        "force_refresh": force_refresh,
+        "collection_mode": collection_mode,
+        "listing_count": len(listings),
+    }
+    if not all_requested:
+        run = Run(
+            kind=RunKind.scrape,
+            status=RunStatus.skipped,
+            summary={**summary, "phase": "completed", "reason": "all_dates_fresh"},
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.commit()
+        return run
+    run = Run(kind=RunKind.scrape, status=RunStatus.running, summary=summary)
+    db.add(run)
+    db.flush()
+    batches = [
+        CompetitorScrapeBatch(
+            scrape_run_id=run.id,
+            competitor_listing_id=listing.id,
+            operation="calendar",
+            status="queued",
+            expected_quote_ids=[],
+        )
+        for listing in listings
+        if requested_by_listing[str(listing.id)]
+    ]
+    db.add_all(batches)
+    db.commit()
+    try:
+        for listing in listings:
+            if requested_by_listing[str(listing.id)]:
+                invoke_calendar(run, listing)
+    except Exception as exc:
+        for batch in batches:
+            batch.status = "failed"
+            batch.error = str(exc)
+            batch.finished_at = datetime.now(timezone.utc)
+        run.status = RunStatus.failed
+        run.error = str(exc)
+        run.finished_at = datetime.now(timezone.utc)
+        run.summary = {**summary, "phase": "invocation_failed"}
+        db.commit()
+        raise
+    for batch in batches:
+        batch.status = "running"
+    run.summary = {**summary, "phase": "calendar"}
+    db.commit()
+    return run
+
+
 def _continuous_bookable(
     calendar: dict[date, tuple[bool, int | None]], start: date, end: date
 ) -> bool:
@@ -374,7 +498,10 @@ def create_quote_plan(
     explicit_mode = summary.get("collection_mode")
     intervals: dict[str, tuple[date, date]] = {}
     targets: list[CompetitorPriceTarget] = []
-    for value in summary.get("requested_dates", []):
+    requested_dates_for_listing = summary.get("requested_dates_by_listing", {}).get(
+        str(listing.id), summary.get("requested_dates", [])
+    )
+    for value in requested_dates_for_listing:
         stay_date = date.fromisoformat(value)
         mode = explicit_mode or collection_mode_for_date(stay_date)
         method, planned_quotes = plan_target(
@@ -493,7 +620,7 @@ def calculate_target_price(
 
 
 def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
-    """Calculate all targets after every quote batch reaches a terminal state."""
+    """Calculate all listings after every quote batch reaches a terminal state."""
 
     batches = db.scalars(
         select(CompetitorScrapeBatch).where(
@@ -501,6 +628,14 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
             CompetitorScrapeBatch.operation == "quotes",
         )
     ).all()
+    calendar_batches = db.scalars(
+        select(CompetitorScrapeBatch).where(
+            CompetitorScrapeBatch.scrape_run_id == run.id,
+            CompetitorScrapeBatch.operation == "calendar",
+        )
+    ).all()
+    if any(batch.status not in TERMINAL_BATCH_STATUSES for batch in calendar_batches):
+        return
     if any(batch.status not in TERMINAL_BATCH_STATUSES for batch in batches):
         return
     run.summary = {**(run.summary or {}), "phase": "calculating"}
@@ -517,6 +652,9 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
     quotes = {item.quote_id: item for item in quote_rows}
     errors = 0
     for target in targets:
+        target_listing = db.get(CompetitorListing, target.competitor_listing_id)
+        if target.status in {"completed", "failed"}:
+            continue
         observation = db.scalar(
             select(CompetitorObservation).where(
                 CompetitorObservation.scrape_run_id == run.id,
@@ -559,8 +697,16 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
                 )
             errors += 1
     now = datetime.now(timezone.utc)
-    listing.last_scraped_at = now
-    listing.last_error = f"{errors} date(s) failed" if errors else None
+    listing_ids = {item.competitor_listing_id for item in targets}
+    for listing_id in listing_ids:
+        target_listing = db.get(CompetitorListing, listing_id)
+        listing_errors = sum(
+            1
+            for item in targets
+            if item.competitor_listing_id == listing_id and item.status == "failed"
+        )
+        target_listing.last_scraped_at = now
+        target_listing.last_error = f"{listing_errors} date(s) failed" if listing_errors else None
     run.status = RunStatus.partially_succeeded if errors else RunStatus.succeeded
     run.error = listing.last_error
     run.finished_at = now
@@ -576,7 +722,7 @@ def finalize_run(db: Session, run: Run, listing: CompetitorListing) -> None:
         "quote_batch_count": len(batches),
         "date_error_count": errors,
     }
-    run.summary["pruned_observation_count"] = prune_competitor_observations(
-        db, listing.id
+    run.summary["pruned_observation_count"] = sum(
+        prune_competitor_observations(db, listing_id) for listing_id in listing_ids
     )
     db.commit()

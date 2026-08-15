@@ -221,9 +221,10 @@ class PricingConfigurationOverride(BaseModel):
 
 
 class CompetitorScrapeCreate(BaseModel):
-    """Validate a granular manual competitor collection request."""
+    """Validate a pricing-group competitor collection request."""
 
-    competitor_listing_id: int
+    pricing_group_id: int | None = None
+    competitor_listing_id: int | None = None
     start_date: date
     end_date: date
     force_refresh: bool = False
@@ -235,6 +236,10 @@ class CompetitorScrapeCreate(BaseModel):
 
         if self.end_date < self.start_date:
             raise ValueError("end_date must not precede start_date")
+        if self.pricing_group_id is None and self.competitor_listing_id is None:
+            raise ValueError("pricing_group_id is required")
+        if self.pricing_group_id is not None and self.competitor_listing_id is not None:
+            raise ValueError("provide pricing_group_id, not competitor_listing_id")
         return self
 
 

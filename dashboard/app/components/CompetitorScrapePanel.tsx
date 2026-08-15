@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 type Competitor = {
   id: number;
+  pricing_group_id: number;
   pricing_group_name: string;
   canonical_url: string;
   external_listing_id: string;
@@ -61,7 +62,7 @@ export function CompetitorScrapePanel({ competitors, initialRuns }: { competitor
     setMessage("Starting…");
     const form = new FormData(event.currentTarget);
     const payload = {
-      competitor_listing_id: Number(form.get("competitor_listing_id")),
+      pricing_group_id: Number(form.get("pricing_group_id")),
       start_date: form.get("start_date"),
       end_date: form.get("end_date"),
       force_refresh: form.get("force_refresh") === "on",
@@ -85,12 +86,12 @@ export function CompetitorScrapePanel({ competitors, initialRuns }: { competitor
 
   return <>
     <form className="card filters competitor-launch" onSubmit={submit}>
-      <label>Competitor<select name="competitor_listing_id" required disabled={!competitors.length}>
-        {competitors.map(item => <option value={item.id} key={item.id}>{item.pricing_group_name} · {item.external_listing_id}</option>)}
+      <label>Pricing group<select name="pricing_group_id" required disabled={!competitors.length}>
+        {[...new Map(competitors.map(item => [item.pricing_group_id, item.pricing_group_name])).entries()].map(([id, name]) => <option value={id} key={id}>{name}</option>)}
       </select></label>
       <label>From<input name="start_date" type="date" defaultValue={today} required/></label>
       <label>To<input name="end_date" type="date" defaultValue={isoDate(nextWeek)} required/></label>
-      <label>Mode<select name="collection_mode" defaultValue=""><option value="">Automatic</option><option value="precise">Precise</option><option value="rough">Rough</option></select></label>
+      <label>Mode<select name="collection_mode" defaultValue="precise"><option value="precise">Precise</option><option value="rough">Rough</option></select></label>
       <label className="toggle lower"><input name="force_refresh" type="checkbox"/> Force refresh</label>
       <button className="button" disabled={!competitors.length || activeRunId !== null}>{activeRunId ? "Running…" : "Start collection"}</button>
       <span className={message.toLowerCase().includes("error") ? "error" : "muted"}>{message}</span>
@@ -100,7 +101,7 @@ export function CompetitorScrapePanel({ competitors, initialRuns }: { competitor
         {competitors.map(item => <tr key={item.id}><td>{item.pricing_group_name}</td><td><a className="table-link" href={item.canonical_url} target="_blank" rel="noreferrer">{item.external_listing_id}</a></td><td>{item.current_minimum_stay ?? "—"}</td><td>{item.last_collection_mode ?? "—"} / {item.last_price_method ?? "—"}</td><td>{item.last_scraped_at ? new Date(item.last_scraped_at).toLocaleString() : "Never"}</td><td className="error-cell">{item.last_error ?? "—"}</td></tr>)}
       </tbody></table></div>}
     <div className="card calendar competitor-runs"><b>Recent collection runs</b>{initialRuns.length ? <table><thead><tr><th>Started</th><th>Listing</th><th>Range</th><th>Skipped</th><th>Status</th><th>Result</th></tr></thead><tbody>
-      {initialRuns.map(run => <tr key={run.id}><td>{new Date(run.started_at).toLocaleString()}</td><td>{String(run.summary.external_listing_id ?? "—")}</td><td>{String(run.summary.start_date ?? "—")} – {String(run.summary.end_date ?? "—")}</td><td>{Array.isArray(run.summary.skipped_dates) ? run.summary.skipped_dates.length : 0}</td><td><span className="pill">{run.status}</span></td><td>{run.error ?? String(run.summary.result_status ?? run.summary.reason ?? "—")}</td></tr>)}
+      {initialRuns.map(run => <tr key={run.id}><td>{new Date(run.started_at).toLocaleString()}</td><td>{String(run.summary.pricing_group_id ? `Group ${run.summary.pricing_group_id}` : run.summary.external_listing_id ?? "—")}</td><td>{String(run.summary.start_date ?? "—")} – {String(run.summary.end_date ?? "—")}</td><td>{Array.isArray(run.summary.skipped_dates) ? run.summary.skipped_dates.length : Object.values(run.summary.skipped_dates_by_listing ?? {}).reduce((total, dates) => total + (Array.isArray(dates) ? dates.length : 0), 0)}</td><td><span className="pill">{run.status}</span></td><td>{run.error ?? String(run.summary.result_status ?? run.summary.reason ?? "—")}</td></tr>)}
     </tbody></table> : <div className="empty">No competitor collection runs yet.</div>}</div>
   </>;
 }

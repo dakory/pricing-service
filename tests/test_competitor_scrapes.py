@@ -13,6 +13,7 @@ from app.competitor_scrapes import (
     invoke_calendar,
     pending_dates,
     prune_competitor_observations,
+    start_group_collection_run,
     validate_scrape_range,
 )
 from app.config import get_settings
@@ -177,6 +178,47 @@ def test_overlapping_active_run_is_rejected():
             assert getattr(exc, "status_code", None) == 409
         else:
             raise AssertionError("overlapping run was accepted")
+
+
+def test_group_collection_creates_one_run_and_one_calendar_batch_per_listing(monkeypatch):
+    """A manual group refresh fans out listings while keeping one aggregate run."""
+
+    Session = database()
+    with Session() as session:
+        group = PricingGroup(name="Group", pricing_settings={}, competitor_urls=[])
+        session.add(group)
+        session.flush()
+        listings = [
+            CompetitorListing(
+                pricing_group_id=group.id,
+                canonical_url=f"https://www.airbnb.com/rooms/{index}",
+                external_listing_id=str(index),
+            )
+            for index in (1, 2)
+        ]
+        session.add_all(listings)
+        session.commit()
+        events = []
+        monkeypatch.setattr(competitor_scrapes, "invoke_lambda", events.append)
+
+        run = start_group_collection_run(
+            session,
+            group.id,
+            listings,
+            date(2026, 8, 1),
+            date(2026, 8, 2),
+            force_refresh=True,
+            collection_mode="precise",
+        )
+
+        assert run.summary["pricing_group_id"] == group.id
+        assert run.summary["competitor_listing_ids"] == [item.id for item in listings]
+        assert len(events) == 2
+        assert {event["competitor_listing_id"] for event in events} == {
+            item.id for item in listings
+        }
+        assert session.query(Run).count() == 1
+        assert session.query(CompetitorScrapeBatch).count() == 2
 
 
 def test_two_stage_callbacks_persist_calendar_quotes_and_price(monkeypatch):

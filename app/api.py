@@ -21,6 +21,7 @@ from app.competitor_scrapes import (
     create_quote_plan,
     finalize_run,
     invoke_quote_batches,
+    start_group_collection_run,
     quote_identity,
     start_collection_run,
     validate_scrape_range,
@@ -824,7 +825,7 @@ def create_competitor_scrape(
     payload: CompetitorScrapeCreate,
     db: Session = Depends(get_database_session),
 ):
-    """Create and asynchronously invoke one granular competitor scrape."""
+    """Create one scrape run for every competitor in a pricing group."""
 
     settings = get_settings()
     try:
@@ -835,18 +836,40 @@ def create_competitor_scrape(
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    listing = db.get(CompetitorListing, payload.competitor_listing_id)
-    if not listing:
-        raise HTTPException(404, "Competitor listing not found")
     try:
-        run = start_collection_run(
-            db,
-            listing,
-            payload.start_date,
-            payload.end_date,
-            force_refresh=payload.force_refresh,
-            collection_mode=payload.collection_mode,
-        )
+        if payload.pricing_group_id is not None:
+            group = db.get(PricingGroup, payload.pricing_group_id)
+            if not group:
+                raise HTTPException(404, "Pricing group not found")
+            listings = db.scalars(
+                select(CompetitorListing)
+                .where(CompetitorListing.pricing_group_id == group.id)
+                .order_by(CompetitorListing.id)
+            ).all()
+            if not listings:
+                raise HTTPException(422, "Pricing group has no competitor listings")
+            run = start_group_collection_run(
+                db,
+                group.id,
+                listings,
+                payload.start_date,
+                payload.end_date,
+                force_refresh=payload.force_refresh,
+                collection_mode=payload.collection_mode,
+            )
+        else:
+            # Keep the old request shape for API clients during the transition.
+            listing = db.get(CompetitorListing, payload.competitor_listing_id)
+            if not listing:
+                raise HTTPException(404, "Competitor listing not found")
+            run = start_collection_run(
+                db,
+                listing,
+                payload.start_date,
+                payload.end_date,
+                force_refresh=payload.force_refresh,
+                collection_mode=payload.collection_mode,
+            )
     except HTTPException:
         raise
     except Exception as exc:
@@ -914,10 +937,17 @@ def _competitor_run_listing(
     run = db.get(Run, run_id)
     if not run or run.kind != RunKind.scrape:
         raise HTTPException(404, "Competitor scrape run not found")
-    listing = db.get(
-        CompetitorListing, (run.summary or {}).get("competitor_listing_id")
+    summary = run.summary or {}
+    listing_ids = summary.get("competitor_listing_ids")
+    if listing_ids is None:
+        listing_ids = [summary.get("competitor_listing_id")]
+    listing = db.scalar(
+        select(CompetitorListing).where(
+            CompetitorListing.id.in_([item for item in listing_ids if item is not None]),
+            CompetitorListing.external_listing_id == external_listing_id,
+        )
     )
-    if not listing or listing.external_listing_id != external_listing_id:
+    if not listing:
         raise HTTPException(409, "Callback listing does not match its run")
     return run, listing
 
@@ -939,6 +969,7 @@ def receive_competitor_calendar(
         select(CompetitorScrapeBatch).where(
             CompetitorScrapeBatch.scrape_run_id == run.id,
             CompetitorScrapeBatch.operation == "calendar",
+            CompetitorScrapeBatch.competitor_listing_id == listing.id,
         )
     )
     if not batch:
@@ -964,7 +995,10 @@ def receive_competitor_calendar(
         for left, right in zip(ordered, ordered[1:])
     ):
         raise HTTPException(422, "Calendar callback must contain a continuous range")
-    requested = {date.fromisoformat(item) for item in run.summary["requested_dates"]}
+    requested_values = (run.summary or {}).get("requested_dates_by_listing", {}).get(
+        str(listing.id), (run.summary or {}).get("requested_dates", [])
+    )
+    requested = {date.fromisoformat(item) for item in requested_values}
     returned = {item.stay_date for item in ordered}
     if not requested.issubset(returned):
         raise HTTPException(422, "Calendar does not cover every requested date")
