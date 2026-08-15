@@ -352,8 +352,8 @@ async def import_booking_site_calendars(
     db.commit()
     return {
         "scope": "booking_site",
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
         "listings": len(listings),
         "calendar": {
             "created": counts[0],
